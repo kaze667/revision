@@ -493,9 +493,9 @@ details.panel > summary { font-size: 14.5px; }
           <label>Type de document<select id="iKind"><option value="cours">Cours</option><option value="fiche">Fiche de révision</option><option value="td">TD / exercices</option></select></label>
           <label>Matière (nouveau chapitre)<input id="iMat" list="matieres" placeholder="Microéconomie"></label>
           <label>Date du cours (nouveau chapitre)<input id="iDate" type="date"></label>
-          <label class="full">Titre (nouveau chapitre, laisse vide pour que Claude le propose)<input id="iTitre" placeholder="Ch. 4 : La fonction de coût"></label>
+          <label class="full">Titre (nouveau chapitre, laisse vide pour que l'IA le propose)<input id="iTitre" placeholder="Ch. 4 : La fonction de coût"></label>
         </div>
-        <div class="formfoot"><span class="hint">Le fichier est stocké, Claude en extrait les notions clés et crée des flashcards ; un nouveau chapitre reçoit aussi ses 5 révisions.</span><button class="primary" type="submit" id="iBtn">Importer</button></div>
+        <div class="formfoot"><span class="hint">Le fichier est stocké, l'IA en extrait les notions clés et crée des flashcards ; un nouveau chapitre reçoit aussi ses 5 révisions.</span><button class="primary" type="submit" id="iBtn">Importer</button></div>
         <div id="impOut"></div>
       </form>
       <form class="panel" id="fChap" autocomplete="off" hidden>
@@ -579,21 +579,13 @@ details.panel > summary { font-size: 14.5px; }
     <section>
       <h2>Intelligence artificielle</h2>
       <form class="panel" id="fIA" autocomplete="off">
-        <label>Fournisseur<select id="pProvider">
-          <option value="gemini">Google Gemini, gratuit (recommandé)</option>
-          <option value="claude">Claude API, payant à l'usage</option>
-        </select></label>
+        <div class="hint">L'IA de l'appli est Google Gemini, gratuite. Chacun utilise sa propre clé.</div>
         <div id="gemBox" class="panel" style="gap:8px">
           <label>Clé API Gemini<span class="keyrow"><input id="pGemKey" type="password" placeholder="AIza…" autocomplete="off"><button type="button" id="pGemTest">Tester</button></span></label>
           <div class="hint">Gratuite : va sur <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, connecte-toi avec un compte Google, clique sur « Create API key », copie-la ici. Avec l'offre gratuite, Google peut utiliser tes requêtes pour améliorer ses modèles : n'importe pas de documents personnels sensibles.</div>
           <label>Modèle (facultatif)<input id="pGemModel" placeholder="automatique (meilleur modèle Flash gratuit)"></label>
         </div>
-        <div id="claBox" class="panel" style="gap:8px" hidden>
-          <label>Clé API Claude<span class="keyrow"><input id="pClaKey" type="password" placeholder="sk-ant-…" autocomplete="off"><button type="button" id="pClaTest">Tester</button></span></label>
-          <div class="hint">Payant à l'usage, à créer sur <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>. Fixe une limite de dépense sur la console.</div>
-          <label>Modèle<input id="pClaModel" placeholder="claude-sonnet-5-5"></label>
-        </div>
-        <div class="formfoot"><span class="hint">Ta clé est enregistrée dans ton compte et n'est visible que par toi.</span><button class="primary" type="submit">Enregistrer</button></div>
+        <div class="formfoot"><span class="hint">Ta clé est enregistrée dans ton compte ; les autres utilisateurs ne peuvent pas la voir.</span><button class="primary" type="submit">Enregistrer</button></div>
         <div id="iaOut"></div>
       </form>
     </section>
@@ -2630,7 +2622,7 @@ async function openFile(f) {
   if (w) w.location = data.signedUrl; else location.href = data.signedUrl;
 }
 
-/* ---------- IA : Gemini (gratuit) ou Claude (clé personnelle) ---------- */
+/* ---------- IA : Gemini (gratuit, clé personnelle) ---------- */
 const blobToB64 = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(b); });
 async function prepImage(blob) {
   try {
@@ -2687,17 +2679,17 @@ async function geminiCall(key, model, parts, signal) {
   return parseJsonLoose(text);
 }
 const AI = {
-  provider() { return (profile && profile.ia_provider) || "gemini"; },
-  ready() { return this.provider() === "claude" ? !!(profile && profile.claude_key) : !!(profile && profile.gemini_key); },
+  provider() { return "gemini"; },
+  ready() { return !!(profile && profile.gemini_key); },
   limits() { return { images: { maxCount: 6, mediaTypes: ["image/jpeg", "image/png", "image/webp", "image/heic"] } }; },
-  maxPdfBytes() { return this.provider() === "claude" ? 24 * 1024 * 1024 : 15 * 1024 * 1024; },
+  maxPdfBytes() { return 15 * 1024 * 1024; },
   async json(prompt, opts = {}) {
     if (!this.ready()) throw { code: "no_key" };
     const images = [];
     for (const b of [].concat(opts.images || []).filter(Boolean)) { const jb = await prepImage(b); images.push({ mime: jb.type || "image/jpeg", data: await blobToB64(jb) }); }
     const pdfs = [];
     for (const f of [].concat(opts.files || []).filter(Boolean)) pdfs.push({ mime: "application/pdf", data: await blobToB64(f) });
-    return this.provider() === "claude" ? this._claude(prompt, images, pdfs, opts.signal) : this._gemini(prompt, images, pdfs, opts.signal);
+    return this._gemini(prompt, images, pdfs, opts.signal);
   },
   async _gemini(prompt, images, pdfs, signal) {
     const key = profile.gemini_key;
@@ -2723,25 +2715,6 @@ const AI = {
       }
     }
     throw lastErr || { code: "upstream_error" };
-  },
-  async _claude(prompt, images, pdfs, signal) {
-    const content = [].concat(
-      pdfs.map(p => ({ type: "document", source: { type: "base64", media_type: "application/pdf", data: p.data } })),
-      images.map(i => ({ type: "image", source: { type: "base64", media_type: i.mime === "image/png" || i.mime === "image/webp" ? i.mime : "image/jpeg", data: i.data } })),
-      [{ type: "text", text: prompt + "\n\nRéponds uniquement avec du JSON valide, sans texte autour." }]);
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", signal,
-      headers: { "content-type": "application/json", "x-api-key": profile.claude_key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: profile.claude_model || "claude-sonnet-5-5", max_tokens: 8000, messages: [{ role: "user", content }] })
-    });
-    if (!res.ok) {
-      let msg = ""; try { const j = await res.json(); msg = (j.error && j.error.message) || ""; } catch (e) {}
-      throw res.status === 401 || res.status === 403 ? { code: "bad_key", message: msg } : res.status === 429 ? { code: "rate_limited", message: msg } : res.status === 413 ? { code: "too_big", message: msg } : { code: "upstream_error", message: msg || ("HTTP " + res.status) };
-    }
-    const j = await res.json();
-    const text = (j.content || []).filter(c => c.type === "text").map(c => c.text).join("");
-    if (!text) throw { code: "empty_completion" };
-    return parseJsonLoose(text);
   }
 };
 
@@ -2846,9 +2819,7 @@ function renderSettings() {
   const p = profile;
   const setIf = (id, v) => { const e = $(id); if (e && document.activeElement !== e) e.value = v || ""; };
   setIf("pPrenom", p.prenom); setIf("pNiveau", p.niveau);
-  $("pProvider").value = p.ia_provider || "gemini";
-  setIf("pGemKey", p.gemini_key); setIf("pGemModel", p.gemini_model); setIf("pClaKey", p.claude_key); setIf("pClaModel", p.claude_model);
-  $("gemBox").hidden = $("pProvider").value !== "gemini"; $("claBox").hidden = $("pProvider").value !== "claude";
+  setIf("pGemKey", p.gemini_key); setIf("pGemModel", p.gemini_model);
   setIf("pMatin", p.heure_matin || "07:00"); setIf("pSoir", p.heure_soir || "20:00");
   $("accountLine").textContent = IS_DESKTOP ? "Logiciel v" + (window.desktop.version || "?") + " · données enregistrées sur ce PC" : "Connecté : " + (user && user.email);
   if (IS_DESKTOP) {
@@ -2874,7 +2845,7 @@ function renderSettings() {
 async function testKey(kind) {
   const out = $("iaOut");
   const saved = clone(profile);
-  profile = Object.assign({}, profile, kind === "gemini" ? { ia_provider: "gemini", gemini_key: $("pGemKey").value.trim(), gemini_model: $("pGemModel").value.trim() || null } : { ia_provider: "claude", claude_key: $("pClaKey").value.trim(), claude_model: $("pClaModel").value.trim() || null });
+  profile = Object.assign({}, profile, { ia_provider: "gemini", gemini_key: $("pGemKey").value.trim(), gemini_model: $("pGemModel").value.trim() || null });
   out.replaceChildren(busy("Test de la clé…"));
   try {
     const r = await AI.json('Réponds uniquement avec ce JSON : {"ok": true}');
@@ -2910,11 +2881,9 @@ async function importData(file) {
   $("pImport").value = "";
 }
 function setupSettings() {
-  $("pProvider").addEventListener("change", () => { $("gemBox").hidden = $("pProvider").value !== "gemini"; $("claBox").hidden = $("pProvider").value !== "claude"; });
   $("fProfil").addEventListener("submit", ev => { ev.preventDefault(); saveProfile({ prenom: $("pPrenom").value.trim() || null, niveau: $("pNiveau").value.trim() || null }, "Profil enregistré"); });
-  $("fIA").addEventListener("submit", ev => { ev.preventDefault(); try { localStorage.removeItem("revi-gm"); } catch (e) {} saveProfile({ ia_provider: $("pProvider").value, gemini_key: $("pGemKey").value.trim() || null, gemini_model: $("pGemModel").value.trim() || null, claude_key: $("pClaKey").value.trim() || null, claude_model: $("pClaModel").value.trim() || null }, "Réglages IA enregistrés"); });
+  $("fIA").addEventListener("submit", ev => { ev.preventDefault(); try { localStorage.removeItem("revi-gm"); } catch (e) {} saveProfile({ ia_provider: "gemini", gemini_key: $("pGemKey").value.trim() || null, gemini_model: $("pGemModel").value.trim() || null, claude_key: null, claude_model: null }, "Réglages IA enregistrés"); });
   $("pGemTest").addEventListener("click", () => testKey("gemini"));
-  $("pClaTest").addEventListener("click", () => testKey("claude"));
   $("fNotif").addEventListener("submit", ev => { ev.preventDefault(); saveProfile({ heure_matin: $("pMatin").value || "07:00", heure_soir: $("pSoir").value || "20:00" }, "Heures enregistrées"); });
   $("pNotifOn").addEventListener("click", enablePush);
   $("pNotifTest").addEventListener("click", testPush);
