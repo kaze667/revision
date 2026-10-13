@@ -1,0 +1,79 @@
+# Fabrique le logiciel Windows (.exe) et Mac (.dmg) et le publie dans "Releases".
+# Lancement : onglet Actions > "Publier le logiciel" > Run workflow > numéro de version (ex. 1.0.1).
+# Les logiciels Windows déjà installés se mettent à jour tout seuls ; sur Mac un bandeau prévient.
+name: Publier le logiciel
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Numéro de version, plus grand que le précédent (ex. 1.0.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Préparer (copie de l'interface + numéro de version)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          V="${VERSION#v}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "Version invalide : $V (attendu : 1.0.1)"; exit 1; fi
+          mkdir -p app
+          cp ../index.html ../config.js ../manifest.webmanifest ../icon-192.png ../icon-512.png app/
+          npm version "$V" --no-git-tag-version --allow-same-version
+          npm install --no-audit --no-fund
+      - name: Construire
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.blockmap
+            desktop/dist/latest*.yml
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Version
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "v=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.v }}
+          name: Version ${{ steps.v.outputs.v }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: out/*
+          body: |
+            Windows : télécharge Revisions-Setup-${{ steps.v.outputs.v }}.exe
+            Mac (Apple M1/M2/M3/M4) : Revisions-${{ steps.v.outputs.v }}-arm64.dmg
+            Mac (Intel) : Revisions-${{ steps.v.outputs.v }}-x64.dmg
