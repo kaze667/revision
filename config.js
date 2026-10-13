@@ -4,7 +4,7 @@
 // de l'utilisateur connecté, grâce aux règles de sécurité (RLS) du script SQL.
 window.REVI_CONFIG = {
   // Supabase > Project Settings > API > Project URL
-  supabaseUrl: "https://https://bglrnvckyvtpsgtshzpr.supabase.co",
+  supabaseUrl: "https://bglrnvckyvtpsgtshzpr.supabase.co",
   // Supabase > Project Settings > API > Project API keys > anon / public
   supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJnbHJudmNreXZ0cHNndHNoenByIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4OTU4OTEsImV4cCI6MjEwNzQ3MTg5MX0.wz6rtHB8s1UJxno_4-7eEjtp46bxRmNozmwde87vYBY",
   // Clé VAPID publique générée avec : npx web-push generate-vapid-keys
