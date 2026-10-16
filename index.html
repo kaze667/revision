@@ -292,6 +292,9 @@ details.panel > summary { font-size: 14.5px; }
 @media (max-width: 560px) { .bilan-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .upd-bar { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+
+.daterow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.daterow button { padding: 7px 10px; font-size: 13px; }
 </style>
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
@@ -362,7 +365,7 @@ details.panel > summary { font-size: 14.5px; }
     <section id="briefSection">
       <h2>Questions du jour</h2>
       <div class="list" id="briefBox"></div>
-      <div class="row"><span class="hint" id="briefHint">Des questions de rappel actif sur ce que tu dois revoir aujourd'hui, en mélangeant les matières.</span><button type="button" id="briefBtn">Préparer mes questions</button></div>
+      <div class="row"><span class="hint" id="briefHint">Des questions de rappel actif sur tous tes cours en même temps, avec plus de questions pour les examens proches.</span><button type="button" id="briefBtn">Préparer mes questions</button></div>
     </section>
     <section>
       <h2>Ta régularité <span class="count" id="streakCount"></span></h2>
@@ -493,6 +496,8 @@ details.panel > summary { font-size: 14.5px; }
           <label>Type de document<select id="iKind"><option value="cours">Cours</option><option value="fiche">Fiche de révision</option><option value="td">TD / exercices</option></select></label>
           <label>Matière (nouveau chapitre)<input id="iMat" list="matieres" placeholder="Microéconomie"></label>
           <label>Date du cours (nouveau chapitre)<input id="iDate" type="date"></label>
+          <label>Début des révisions (nouveau chapitre)<span class="daterow"><input id="iDebut" type="date"><button type="button" id="iLight" title="Choisit le jour où tu as le moins de révisions prévues">Jour le plus léger</button></span></label>
+          <div class="full hint" id="iDebutHint"></div>
           <label class="full">Titre (nouveau chapitre, laisse vide pour que l'IA le propose)<input id="iTitre" placeholder="Ch. 4 : La fonction de coût"></label>
         </div>
         <div class="formfoot"><span class="hint">Le fichier est stocké, l'IA en extrait les notions clés et crée des flashcards ; un nouveau chapitre reçoit aussi ses 5 révisions.</span><button class="primary" type="submit" id="iBtn">Importer</button></div>
@@ -502,10 +507,12 @@ details.panel > summary { font-size: 14.5px; }
         <div class="fields">
           <label>Matière<input id="cMat" list="matieres" required placeholder="Microéconomie"></label>
           <label>Date du cours<input id="cDate" type="date" required></label>
+          <label>Début des révisions<span class="daterow"><input id="cDebut" type="date"><button type="button" id="cLight" title="Choisit le jour où tu as le moins de révisions prévues">Jour le plus léger</button></span></label>
+          <div class="full hint" id="cDebutHint"></div>
           <label class="full">Chapitre ou séance<input id="cTitre" required placeholder="Ch. 4 : La fonction de coût"></label>
           <label class="full">Notions clés (facultatif)<textarea id="cNotions" placeholder="coût marginal, coût moyen, rendements d'échelle…"></textarea></label>
         </div>
-        <div class="formfoot"><span class="hint">Crée les 5 étapes : soir même, J+1, J+3, J+7, J+30.</span><button class="primary" type="submit">Ajouter le cours</button></div>
+        <div class="formfoot"><span class="hint">Crée les 5 étapes à partir du début des révisions : J0, J+1, J+3, J+7, J+30. Décale le début pour étaler ta charge entre les cours.</span><button class="primary" type="submit">Ajouter le cours</button></div>
       </form>
       <datalist id="matieres"></datalist>
     </section>
@@ -671,6 +678,7 @@ function toast(msg) {
 let db = null, sample = null, assets = null, imgLimits = null;
 let chapitres = [], examens = [], cartes = [], exercices = [], brief = null, statsJour = null, statsAll = [];
 let loaded = { c: false, e: false, k: false, x: false };
+let resetCDebut = null, resetIDebut = null;
 let pendingDelete = null, editing = null, currentTab = "jour";
 let session = null, editCardId = null, curExo = null;
 
@@ -793,6 +801,54 @@ function examFor(chap) {
   return upcomingExams().find(e => (Array.isArray(e.chapIds) && e.chapIds.length ? e.chapIds.includes(chap.id) : e.matiere === chap.matiere)) || null;
 }
 function daysToExam(chap) { const e = examFor(chap); return e ? diff(e.date, today()) : null; }
+
+/* ---- Début des révisions choisi par cours : étaler la charge ---- */
+const chapDebut = c => (c && (c.debut || c.dateVu)) || today();
+function stageLoad(excludeId) {
+  const m = new Map();
+  for (const c of chapitres) if (c.id !== excludeId) for (const s of c.etapes || []) if (!s.fait && s.due) m.set(s.due, (m.get(s.due) || 0) + 1);
+  return m;
+}
+// Jour de départ (dans les 7 jours à partir de « from ») qui charge le moins les jours J0, J1, J3, J7 et J30
+function lightestStart(from, excludeId) {
+  const load = stageLoad(excludeId), t = today(), start = !from || from < t ? t : from;
+  let best = null;
+  for (let k = 0; k < 7; k++) {
+    const d = addDays(start, k), counts = STAGES.map(s => load.get(addDays(d, s.offset)) || 0);
+    const score = Math.max(...counts.slice(0, 4)) * 10 + counts.reduce((a, b) => a + b, 0) + k * 0.6;
+    if (!best || score < best.score) best = { d, score };
+  }
+  return best.d;
+}
+function debutHint(debut, excludeId) {
+  if (!debut) return "";
+  const load = stageLoad(excludeId);
+  return "Révisions : " + STAGES.map(s => { const x = addDays(debut, s.offset), n = load.get(x) || 0; return s.code + " " + pretty(x) + (n ? " (+" + n + " déjà prévue" + (n > 1 ? "s" : "") + ")" : ""); }).join(" · ");
+}
+function bindDebut(dateId, debutId, lightId, hintId) {
+  const dv = $(dateId), db0 = $(debutId), hint = $(hintId);
+  const refresh = () => { hint.textContent = debutHint(db0.value || dv.value || today()); };
+  dv.addEventListener("change", () => { if (!db0.dataset.touched) db0.value = dv.value; refresh(); });
+  db0.addEventListener("change", () => { db0.dataset.touched = "1"; refresh(); });
+  $(lightId).addEventListener("click", () => { db0.value = lightestStart(dv.value || today()); db0.dataset.touched = "1"; refresh(); });
+  return () => { delete db0.dataset.touched; db0.value = dv.value; refresh(); };
+}
+
+/* ---- Questions du jour : tous les cours, priorité aux examens proches ---- */
+function briefPool() {
+  const due = new Map();
+  for (const it of dueItems()) if (it.kind === "chap" && !due.has(it.doc.id)) due.set(it.doc.id, it.s.code);
+  const scored = chapitres.map(c => {
+    const dte = daysToExam(c), weak = cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).length, exam = dte !== null && dte <= 21;
+    let score = (exam ? 120 - dte * 5 : 0) + (due.has(c.id) ? 30 : 0) + (5 - (c.niveau || 1)) * 4 + Math.min(weak, 5) * 3 + Math.min((c.pointsFaibles || []).length, 5) + Math.random() * 8;
+    return { c, score, exam, etape: exam ? "examen dans " + dte + " j" : due.get(c.id) || "entretien" };
+  }).sort((a, b) => b.score - a.score);
+  const out = [], mats = new Set();
+  for (const x of scored) if (!mats.has(x.c.matiere)) { mats.add(x.c.matiere); out.push(x); }
+  for (const x of scored) if (out.length < 8 && !out.includes(x)) out.push(x);
+  return out.sort((a, b) => b.score - a.score).slice(0, 8);
+}
+const BRIEF_RULE = "Répartition : couvre toutes les matières listées (au moins une question chacune) ; s'il y a des chapitres marqués « examen dans N j », donne-leur au moins la moitié des questions, d'autant plus que l'examen est proche, en questions type partiel.";
 
 /* ================= Calendrier (Aujourd'hui) ================= */
 function dueItems() {
@@ -947,9 +1003,22 @@ function priority(card) {
   const dte = daysToExam(chapById(card.chapId));
   return (dte !== null && dte <= 14 ? 100 - dte : 0) + (card.lapses || 0) * 3;
 }
+// Examen dans 7 jours ou moins : on avance des cartes de son programme (les plus fragiles d'abord)
+function examPull(dueIds) {
+  const t = today(), out = [];
+  for (const ex of upcomingExams()) {
+    const d = diff(ex.date, t); if (d > 7) continue;
+    const cap = d <= 2 ? 20 : d <= 4 ? 14 : 8;
+    const pool = cartes.filter(k => !k.nouveau && !k.suspendue && !dueIds.has(k.id) && k.vueLe !== t && (k.due || t) > t && (Array.isArray(ex.chapIds) && ex.chapIds.length ? ex.chapIds.includes(k.chapId) : (chapById(k.chapId) || {}).matiere === ex.matiere))
+      .sort((a, b) => (b.lapses || 0) - (a.lapses || 0) || (a.ease || 2.5) - (b.ease || 2.5) || String(a.due).localeCompare(String(b.due)));
+    for (const k of pool) { if (out.length >= 25) break; if (out.filter(x => x._ex === ex.id).length >= cap) break; if (!out.some(x => x.k.id === k.id)) out.push({ k, _ex: ex.id }); }
+  }
+  return out.map(x => x.k);
+}
 function buildQueue(randomize = true) {
   const t = today();
-  const due = cartes.filter(c => !c.nouveau && (c.due || t) <= t && !c.suspendue);
+  const due0 = cartes.filter(c => !c.nouveau && (c.due || t) <= t && !c.suspendue);
+  const due = due0.concat(examPull(new Set(due0.map(c => c.id))));
   const fresh = cartes.filter(c => c.nouveau && !c.suspendue).sort((a, b) => priority(b) - priority(a) || String(a.creeLe || "").localeCompare(String(b.creeLe || "")));
   const nw = fresh.slice(0, newLimit());
   if (!randomize) return due.concat(nw);
@@ -1320,7 +1389,7 @@ function renderChapters() {
         c.notions ? el("div", { class: "full m" }, c.notions) : null,
         (c.fichiers || []).filter(f => f.path).length ? el("div", { class: "full actions", style: "justify-content:flex-start" }, c.fichiers.filter(f => f.path).map(f => el("button", { type: "button", onclick: () => openFile(f) }, (f.kind === "fiche" ? "Fiche · " : f.kind === "td" ? "TD · " : "Cours · ") + f.nom))) : null,
         el("div", { class: "full row" },
-          el("span", { class: "m" }, "vu le " + pretty(c.dateVu) + " · " + nCards + " cartes · niveau ", lvlBar(c.niveau || 1)),
+          el("span", { class: "m" }, "vu le " + pretty(c.dateVu) + (c.debut && c.debut !== c.dateVu ? " · révisions dès le " + pretty(c.debut) : "") + " · " + nCards + " cartes · niveau ", lvlBar(c.niveau || 1)),
           el("span", { class: "actions" },
             el("button", { class: "link", type: "button", onclick: () => exportPaquet(c) }, "Partager"),
             el("button", { class: "link", type: "button", onclick: () => { editing = "chapitres/" + c.id; renderChapters(); } }, "Modifier"),
@@ -1334,6 +1403,8 @@ function chapEditForm(c) {
   const mat = el("input", { list: "matieres", value: c.matiere, required: true, id: "ed-mat-" + c.id });
   const tit = el("input", { value: c.titre, required: true, id: "ed-tit-" + c.id });
   const dv = el("input", { type: "date", value: c.dateVu, required: true, id: "ed-dv-" + c.id });
+  const deb = el("input", { type: "date", value: chapDebut(c), id: "ed-deb-" + c.id });
+  const debHint = el("div", { class: "full hint" });
   const not = el("textarea", { id: "ed-not-" + c.id }); not.value = c.notions || "";
   const niv = el("select", { id: "ed-niv-" + c.id }, [1, 2, 3, 4, 5].map(n => el("option", { value: String(n) }, n + " · " + LEVELS[n]))); niv.value = String(c.niveau || 1);
   const pf = el("textarea", { id: "ed-pf-" + c.id, placeholder: "Un point faible par ligne" }); pf.value = (c.pointsFaibles || []).join("\n");
@@ -1343,11 +1414,16 @@ function chapEditForm(c) {
     const fait = el("input", { type: "checkbox", id: "ed-f-" + c.id + "-" + i }); fait.checked = !!s.fait;
     return { s, due, fait, node: el("div", { class: "stage-row" }, el("span", { class: "mono" }, s.code), due, el("label", { class: "inline" }, fait, "fait")) };
   });
-  dv.addEventListener("change", () => { for (const r of rows) if (!r.fait.checked) r.due.value = addDays(dv.value, r.s.offset); });
+  const reflow = () => { for (const r of rows) if (!r.fait.checked) r.due.value = addDays(deb.value || dv.value, r.s.offset); debHint.textContent = debutHint(deb.value || dv.value, c.id); };
+  let debTouched = (c.debut && c.debut !== c.dateVu);
+  dv.addEventListener("change", () => { if (!debTouched) deb.value = dv.value; reflow(); });
+  deb.addEventListener("change", () => { debTouched = true; reflow(); });
+  const light = el("button", { type: "button", title: "Choisit le jour où tu as le moins de révisions prévues", onclick: () => { deb.value = lightestStart(dv.value > today() ? dv.value : today(), c.id); debTouched = true; reflow(); } }, "Jour le plus léger");
+  debHint.textContent = debutHint(deb.value, c.id);
   return el("form", { class: "panel", onsubmit: async ev => {
     ev.preventDefault();
     const etapes = rows.map(r => Object.assign({}, r.s, { due: r.due.value || r.s.due, fait: r.fait.checked ? (r.s.fait || today()) : null }));
-    const data = { matiere: mat.value.trim(), titre: tit.value.trim(), dateVu: dv.value, notions: not.value.trim(), niveau: Number(niv.value), pointsFaibles: pf.value.split("\n").map(x => x.trim()).filter(Boolean).slice(0, 12), etapes };
+    const data = { matiere: mat.value.trim(), titre: tit.value.trim(), dateVu: dv.value, debut: deb.value || dv.value, notions: not.value.trim(), niveau: Number(niv.value), pointsFaibles: pf.value.split("\n").map(x => x.trim()).filter(Boolean).slice(0, 12), etapes };
     if (!data.matiere || !data.titre || !data.dateVu) return;
     const ok = await write(() => db.doc("chapitres/" + c.id).update(data), "Chapitre modifié");
     if (ok) {
@@ -1358,16 +1434,18 @@ function chapEditForm(c) {
     el("h3", {}, "Modifier le chapitre"),
     el("div", { class: "fields" },
       el("label", {}, "Matière", mat), el("label", {}, "Date du cours", dv),
+      el("label", {}, "Début des révisions", el("span", { class: "daterow" }, deb, light)), debHint,
       el("label", { class: "full" }, "Titre", tit),
       el("label", { class: "full" }, "Notions clés", not),
       el("label", {}, "Niveau en exercices", niv),
       el("label", { class: "full" }, "Points faibles", pf)),
-    el("div", {}, el("div", { class: "hint", style: "margin-bottom:6px" }, "Dates des révisions (changer la date du cours recalcule celles non faites)"), el("div", { class: "stages" }, rows.map(r => r.node))),
+    el("div", {}, el("div", { class: "hint", style: "margin-bottom:6px" }, "Dates des révisions (changer le début des révisions recalcule celles non faites ; tu peux aussi ajuster chaque date)"), el("div", { class: "stages" }, rows.map(r => r.node))),
     el("div", { class: "formfoot" }, el("button", { type: "button", onclick: () => { editing = null; renderChapters(); } }, "Annuler"), el("button", { class: "primary", type: "submit" }, "Enregistrer")));
 }
 
-function newChapterDoc(matiere, titre, dateVu, notions, source) {
-  return { matiere, titre, notions: notions || "", dateVu, etapes: STAGES.map(s => ({ code: s.code, offset: s.offset, due: addDays(dateVu, s.offset), fait: null, ratees: 0 })), creeLe: today(), source, niveau: 1, pointsFaibles: [], historiqueExos: [], fichiers: [] };
+function newChapterDoc(matiere, titre, dateVu, notions, source, debut) {
+  debut = debut || dateVu;
+  return { matiere, titre, notions: notions || "", dateVu, debut, etapes: STAGES.map(s => ({ code: s.code, offset: s.offset, due: addDays(debut, s.offset), fait: null, ratees: 0 })), creeLe: today(), source, niveau: 1, pointsFaibles: [], historiqueExos: [], fichiers: [] };
 }
 
 /* ---- Import de fichiers ---- */
@@ -1452,7 +1530,7 @@ async function importFiles(ev) {
     if (!chap) {
       const matiere = $("iMat").value.trim(), titre = $("iTitre").value.trim() || String(r.titre || "Chapitre importé");
       const id = dateVu + "-" + slug(matiere + " " + titre);
-      const doc = newChapterDoc(matiere, titre, dateVu, String(r.notions || ""), "import");
+      const doc = newChapterDoc(matiere, titre, dateVu, String(r.notions || ""), "import", $("iDebut").value || dateVu);
       doc.fichiers = stored;
       if (!(await write(() => db.doc("chapitres/" + id).set(doc)))) throw { code: "write" };
       chap = Object.assign({ id }, doc);
@@ -1469,7 +1547,7 @@ async function importFiles(ev) {
       if (await write(() => db.doc("cartes/" + chap.id + "-" + rid()).set(Object.assign(newCardBase(chap.id), Object.assign({ matiere: chap.matiere, chapitre: chap.titre }, aiCardData(x), { source: "import" }))))) n++;
     }
     out.replaceChildren(el("div", { class: "info" }, "« " + chap.titre + " » : document enregistré, notions extraites, " + n + " flashcards créées." + (target === "new" ? " Les 5 révisions sont programmées." : "")));
-    $("iFiles").value = ""; $("iTitre").value = "";
+    $("iFiles").value = ""; $("iTitre").value = ""; if (resetIDebut) resetIDebut();
   } catch (e) {
     out.replaceChildren(el("div", { class: "notice" }, e && e.code === "write" ? "Le chapitre n'a pas pu être créé." : e instanceof Error && !e.code ? "Impossible de lire ce fichier. Essaie un autre PDF ou des photos." : sampleMsg(e)));
   } finally { $("iBtn").disabled = false; }
@@ -2052,19 +2130,16 @@ async function generateBrief() {
   $("briefBox").replaceChildren(busy("Préparation de tes questions…"));
   try {
     const t = today();
-    const plan = computePlan().get(t) || [];
-    const dueChaps = dueItems().filter(it => it.kind === "chap").map(it => ({ c: it.doc, etape: it.s.code }));
-    const planChaps = plan.filter(x => x.kind === "chap").map(x => ({ c: x.chap, etape: "examen dans " + diff(x.exam.date, t) + " j" }));
-    let pool = dueChaps.concat(planChaps.filter(x => !dueChaps.some(y => y.c.id === x.c.id)));
-    if (!pool.length) pool = [...chapitres].sort((a, b) => (a.niveau || 1) - (b.niveau || 1)).slice(0, 3).map(c => ({ c, etape: "entretien" }));
+    let pool = briefPool();
     if (!pool.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
-    const lines = pool.slice(0, 6).map(({ c, etape }) => {
+    const lines = pool.map(({ c, etape }) => {
       const hard = cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).slice(0, 4).map(k => k.recto);
       return "- " + c.matiere + " · " + c.titre + " (étape " + etape + ")" + (c.notions ? " ; notions : " + c.notions : "") + ((c.pointsFaibles || []).length ? " ; points faibles : " + c.pointsFaibles.join(" / ") : "") + (hard.length ? " ; cartes souvent ratées : " + hard.join(" / ") : "");
     });
     const prompt = [
       "Tu prépares les questions de rappel actif du jour pour " + etu() + ".",
-      "Chapitres à travailler aujourd'hui :\n" + lines.join("\n"),
+      "Chapitres à travailler aujourd'hui (tous les cours, du plus prioritaire au moins prioritaire) :\n" + lines.join("\n"),
+      BRIEF_RULE,
       "Règles : au plus 10 questions, mélange les matières (entrelacement). Selon l'étape : J1 = définitions et mécanismes ; J3 = application + une question qui relie deux chapitres ; J7 = expliquer avec ses mots, liens entre notions ; J30, examen et entretien = questions type partiel. Cible en priorité les points faibles et les cartes souvent ratées. Réponse courte et exacte pour chaque question. Formules en texte Unicode, sans LaTeX.",
       "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases sur le programme du jour), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"q\": string, \"r\": string}]}"
     ].join("\n\n");
@@ -2454,13 +2529,16 @@ function setupUI() {
   tc.onclick = () => { tc.setAttribute("aria-pressed", "true"); ti.setAttribute("aria-pressed", "false"); $("fChap").hidden = false; $("fImp").hidden = true; };
   $("iTarget").addEventListener("change", renderSelects);
   $("iDate").value = today(); $("cDate").value = today(); $("eDate").value = addDays(today(), 7);
+  $("iDebut").value = today(); $("cDebut").value = today();
+  resetCDebut = bindDebut("cDate", "cDebut", "cLight", "cDebutHint");
+  resetIDebut = bindDebut("iDate", "iDebut", "iLight", "iDebutHint");
   $("fImp").addEventListener("submit", importFiles);
   $("fChap").addEventListener("submit", ev => {
     ev.preventDefault();
     if (!db) return toast("Le suivi n'est pas disponible ici.");
-    const matiere = $("cMat").value.trim(), titre = $("cTitre").value.trim(), dateVu = $("cDate").value, notions = $("cNotions").value.trim();
+    const matiere = $("cMat").value.trim(), titre = $("cTitre").value.trim(), dateVu = $("cDate").value, notions = $("cNotions").value.trim(), debut = $("cDebut").value || dateVu;
     if (!matiere || !titre || !dateVu) return;
-    write(async () => { await db.doc("chapitres/" + dateVu + "-" + slug(matiere + " " + titre)).set(newChapterDoc(matiere, titre, dateVu, notions, "page")); $("cTitre").value = ""; $("cNotions").value = ""; }, "Cours ajouté : 5 révisions programmées");
+    write(async () => { await db.doc("chapitres/" + dateVu + "-" + slug(matiere + " " + titre)).set(newChapterDoc(matiere, titre, dateVu, notions, "page", debut)); $("cTitre").value = ""; $("cNotions").value = ""; if (resetCDebut) resetCDebut(); }, "Cours ajouté : révisions à partir du " + pretty(debut));
   });
   $("eMat").addEventListener("input", () => { if (!$("eProg").dataset.touched) progChecks($("eProg"), [], $("eMat").value.trim()); });
   $("eProg").addEventListener("change", () => { $("eProg").dataset.touched = "1"; });
@@ -2726,15 +2804,13 @@ async function generateBrief() {
   $("briefBox").replaceChildren(busy("L'IA prépare tes questions…"));
   try {
     const t = today();
-    const dueChaps = dueItems().filter(it => it.kind === "chap").map(it => ({ c: it.doc, etape: it.s.code }));
-    const examChaps = chapitres.filter(c => { const d = daysToExam(c); return d !== null && d <= 14; }).map(c => ({ c, etape: "examen" }));
-    let pool = dueChaps.concat(examChaps.filter(x => !dueChaps.some(y => y.c.id === x.c.id)));
-    if (!pool.length) pool = [...chapitres].sort((a, b) => (a.niveau || 1) - (b.niveau || 1)).slice(0, 3).map(c => ({ c, etape: "entretien" }));
+    let pool = briefPool();
     if (!pool.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
-    const lines = pool.slice(0, 6).map(({ c, etape }) => "- " + c.matiere + " · " + c.titre + " (étape " + etape + ")" + (c.notions ? " ; notions : " + c.notions : "") + ((c.pointsFaibles || []).length ? " ; points faibles : " + c.pointsFaibles.join(" / ") : "") + (cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).length ? " ; cartes souvent ratées : " + cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).slice(0, 4).map(k => k.recto).join(" / ") : ""));
+    const lines = pool.map(({ c, etape }) => "- " + c.matiere + " · " + c.titre + " (étape " + etape + ")" + (c.notions ? " ; notions : " + c.notions : "") + ((c.pointsFaibles || []).length ? " ; points faibles : " + c.pointsFaibles.join(" / ") : "") + (cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).length ? " ; cartes souvent ratées : " + cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).slice(0, 4).map(k => k.recto).join(" / ") : ""));
     const prompt = [
       "Tu prépares les questions de rappel actif du jour pour " + etu() + ".",
-      "Chapitres à travailler aujourd'hui :\n" + lines.join("\n"),
+      "Chapitres à travailler aujourd'hui (tous les cours, du plus prioritaire au moins prioritaire) :\n" + lines.join("\n"),
+      BRIEF_RULE,
       "Règles : au plus 10 questions, mélange les matières (entrelacement). Selon l'étape : J1 = définitions et mécanismes de base ; J3 = application + une question qui relie deux chapitres ; J7 = expliquer avec ses mots, liens entre notions ; J30, examen et entretien = questions type partiel. Cible en priorité les points faibles et les cartes souvent ratées. Réponse courte et exacte pour chaque question. Formules en texte Unicode, sans LaTeX.",
       "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases sur le programme du jour), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"q\": string, \"r\": string}]}"
     ].join("\n\n");
