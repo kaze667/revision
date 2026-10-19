@@ -1009,14 +1009,40 @@ function priority(card) {
 // reprogrammée avant l'examen : elle n'est donc plus avancée les jours suivants.
 const inExam = (ex, k) => Array.isArray(ex.chapIds) && ex.chapIds.length ? ex.chapIds.includes(k.chapId) : (chapById(k.chapId) || {}).matiere === ex.matiere;
 const pulledToday = exId => ((statsJour && statsJour.avancees) || {})[exId] || 0;
+// Boucle avant examen : chaque carte du programme repasse plusieurs fois dans les 7 derniers jours,
+// d'autant plus souvent qu'elle est fragile, mais jamais deux jours de suite si elle est bien sue.
+//   fragile (ratée ou « difficile » la dernière fois, ≥ 2 ratés, ou facilité basse) : tous les jours ;
+//   moyenne : un jour sur deux ;  solide (« facile » la dernière fois, ou acquise sans raté) : tous les 3 jours.
+// La veille et le jour J, le délai se resserre d'un jour (dernier tour). Plafond quotidien d'avance
+// (8, 14 à J-4, 20 à J-2), réduit si la journée est déjà chargée, sans descendre sous 5 cartes.
+const LOAD_BUDGET = 70;
+const cardFragile = k => (k.lapses || 0) >= 2 || (k.derniereNote !== undefined && k.derniereNote <= 1) || (k.ease || 2.5) < 2.2;
+const cardSolide = k => k.derniereNote === 3 || ((k.interval || 0) >= 7 && !(k.lapses || 0));
+// Vraiment bien sue : jamais ratée, déjà réussie au moins 2 fois, et « Bien »/« Facile » la dernière fois
+// avec une bonne facilité (ou espacée de 3 semaines et plus) → une seule fois dans la semaine avant l'examen.
+const cardMaitrisee = k => !(k.lapses || 0) && (k.reps || 0) >= 2 && (k.derniereNote === undefined ? (k.interval || 0) >= 21 : k.derniereNote >= 2 && ((k.ease || 2.5) >= 2.6 || (k.interval || 0) >= 21));
+function loopGap(k, d) {
+  if (cardMaitrisee(k)) return d <= 1 ? 5 : 7;
+  const g = cardFragile(k) ? 1 : cardSolide(k) ? 3 : 2;
+  return d <= 1 ? Math.max(1, g - 1) : g;
+}
 function examPull(dueIds) {
-  const t = today(), recent = addDays(t, -2), out = [];
+  const t = today(), out = [];
+  // Charge de la journée calculée de façon stable (les cartes déjà faites aujourd'hui comptent toujours) :
+  // finir une séance ne libère pas de place pour une nouvelle fournée.
+  const doneToday = cartes.filter(k => k.vueLe === t).length;
+  const pulledAll = Object.values((statsJour && statsJour.avancees) || {}).reduce((a, b) => a + b, 0);
+  const pullBudget = LOAD_BUDGET - (dueIds.size + doneToday - pulledAll) - newLimit();
   for (const ex of upcomingExams()) {
     const d = diff(ex.date, t); if (d > 7) continue;
-    const cap = Math.max(0, (d <= 2 ? 20 : d <= 4 ? 14 : 8) - pulledToday(ex.id));
+    const base = d <= 2 ? 20 : d <= 4 ? 14 : 8;
+    const others = pulledAll - pulledToday(ex.id) + out.length;
+    const cap = Math.max(0, Math.max(Math.min(5, base), Math.min(base, pullBudget - others)) - pulledToday(ex.id));
     if (!cap) continue;
-    const pool = cartes.filter(k => !k.nouveau && !k.suspendue && !dueIds.has(k.id) && !(k.vueLe && k.vueLe >= recent) && (k.due || t) >= ex.date && inExam(ex, k))
-      .sort((a, b) => (b.lapses || 0) - (a.lapses || 0) || (a.ease || 2.5) - (b.ease || 2.5) || String(a.due).localeCompare(String(b.due)));
+    const pool = cartes.filter(k => !k.nouveau && !k.suspendue && !dueIds.has(k.id) && inExam(ex, k)
+        && !(k.vueLe && diff(t, k.vueLe) < loopGap(k, d))
+        && ((k.due || t) >= ex.date || cardFragile(k)))
+      .sort((a, b) => (cardFragile(b) - cardFragile(a)) || String(a.vueLe || "").localeCompare(String(b.vueLe || "")) || (b.lapses || 0) - (a.lapses || 0) || (a.ease || 2.5) - (b.ease || 2.5));
     let n = 0;
     for (const k of pool) { if (out.length >= 25 || n >= cap) break; if (!out.some(x => x.id === k.id)) { out.push(Object.assign({}, k, { _pull: ex.id })); n++; } }
   }
@@ -1051,7 +1077,10 @@ function buildQueue(randomize = true) {
   const t = today();
   const due0 = cartes.filter(c => !c.nouveau && (c.due || t) <= t && !c.suspendue);
   const due = due0.concat(examPull(new Set(due0.map(c => c.id))));
-  const fresh = cartes.filter(c => c.nouveau && !c.suspendue).sort((a, b) => priority(b) - priority(a) || String(a.creeLe || "").localeCompare(String(b.creeLe || "")));
+  // Dans les 7 jours avant un partiel, les nouvelles cartes ne viennent que des chapitres au programme
+  // de ce(s) partiel(s) : le temps libéré va à la boucle avant examen.
+  const soon = upcomingExams().filter(e => diff(e.date, t) <= 7);
+  const fresh = cartes.filter(c => c.nouveau && !c.suspendue && (!soon.length || soon.some(e => inExam(e, c)))).sort((a, b) => priority(b) - priority(a) || String(a.creeLe || "").localeCompare(String(b.creeLe || "")));
   const nw = fresh.slice(0, newLimit());
   if (!randomize) return expandSeries(due.concat(nw));
   const pri = due.filter(c => priority(c) >= 80), rest = due.filter(c => priority(c) < 80);
@@ -1062,12 +1091,20 @@ function nextState(card, q) {
   if (q === 0) { c.lapses += 1; c.reps = 0; c.interval = 0; c.ease = Math.max(1.3, c.ease - 0.2); }
   else {
     if (q === 1) { c.interval = c.reps === 0 ? 1 : Math.max(c.interval + 1, Math.round(c.interval * 1.2)); c.ease = Math.max(1.3, c.ease - 0.15); }
-    if (q === 2) { c.interval = c.reps === 0 ? 1 : c.reps === 1 ? 3 : Math.max(c.interval + 1, Math.round(c.interval * c.ease)); }
-    if (q === 3) { c.interval = c.reps === 0 ? 3 : c.reps === 1 ? 5 : Math.max(c.interval + 2, Math.round(c.interval * c.ease * 1.3)); c.ease += 0.15; }
+    // Cartes vraiment bien sues : on les espace nettement plus.
+    const bonus = cardMaitrisee(card) ? (q === 3 ? 1.5 : 1.2) : 1;
+    if (q === 2) { c.interval = c.reps === 0 ? 1 : c.reps === 1 ? 3 : Math.max(c.interval + 1, Math.round(c.interval * c.ease * bonus)); }
+    if (q === 3) { c.interval = c.reps === 0 ? 4 : c.reps === 1 ? 8 : Math.max(c.interval + 3, Math.round(c.interval * c.ease * 1.3 * bonus)); c.ease += 0.15; }
     c.reps += 1;
   }
+  // Avant un examen : une carte qui ne reviendrait qu'après est ramenée dans les 2 à 6 derniers jours
+  // (étalée selon la carte pour éviter un pic la veille). Dans les 7 derniers jours, c'est la boucle avant examen qui gère.
   const dte = daysToExam(chapById(card.chapId));
-  if (q > 0 && dte !== null && dte > 1) c.interval = Math.min(c.interval, Math.max(1, dte - 1));
+  if (q > 0 && dte !== null && dte > 7 && c.interval >= dte) { let h = 0;
+    // une carte maîtrisée n'est ramenée qu'une fois, au début de la dernière semaine (J-6 à J-4)
+    for (const ch of String(card.id || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    c.interval = cardMaitrisee(card) && q >= 2 ? Math.max(1, dte - 4 - (h % 3)) : Math.max(1, dte - 2 - (h % 5));
+  }
   c.due = addDays(t, c.interval);
   // Carte revue en avance (séance ciblée, série) : une bonne réponse ne rapproche jamais sa prochaine révision.
   if (q > 0 && !card._pull && !card.nouveau && card.due && card.due > c.due) { c.due = card.due; c.interval = diff(card.due, t); }
@@ -1082,7 +1119,7 @@ function renderSession() {
     const q = buildQueue(false);
     $("sessCount").textContent = q.length ? q.length + " cartes" : "";
     box.replaceChildren(el("div", { class: "panel" },
-      el("p", {}, q.length ? q.filter(c => !c.nouveau).length + " cartes à revoir et " + q.filter(c => c.nouveau).length + " nouvelles. Réponds de tête (ou à voix haute) avant de retourner la carte, puis note-toi honnêtement." : cartes.length ? "Tout est à jour pour aujourd'hui. Bravo." : "Pas encore de cartes : importe un cours dans l'onglet Cours ou génère des cartes plus bas."),
+      el("p", {}, q.length ? q.filter(c => !c.nouveau).length + " cartes à revoir" + (q.some(c => c._pull) ? " (dont " + q.filter(c => c._pull).length + " en tour avant examen)" : "") + " et " + q.filter(c => c.nouveau).length + " nouvelles" + (upcomingExams().some(e => diff(e.date, today()) <= 7) ? " (uniquement des chapitres au programme de tes partiels de la semaine)" : "") + ". Réponds de tête (ou à voix haute) avant de retourner la carte, puis note-toi honnêtement." : cartes.length ? "Tout est à jour pour aujourd'hui. Bravo." : "Pas encore de cartes : importe un cours dans l'onglet Cours ou génère des cartes plus bas."),
       el("div", { class: "row" }, el("span", { class: "hint" }, "Raté = la carte revient dans la séance · Facile = elle s'espace davantage"), el("button", { class: "primary", type: "button", disabled: !q.length, onclick: startSession }, "Commencer la séance"))));
     return;
   }
@@ -1104,7 +1141,7 @@ function renderSession() {
   box.replaceChildren(el("div", { class: "flash" },
     el("div", { class: "progress" }, el("i", { style: "width:" + Math.round(100 * s.idx / Math.max(1, s.queue.length)) + "%" })),
     el("div", { class: "row" }, el("span", { class: "actions", style: "justify-content:flex-start" }, chap ? el("span", { class: "chip mat", style: mcStyle(chap.matiere) }, chap.matiere) : null, el("span", { class: "m" }, chap ? chap.titre : "Chapitre supprimé")),
-      el("span", { class: "actions" }, card.nouveau ? el("span", { class: "chip" }, "nouvelle") : null, (card.lapses || 0) >= 2 ? el("span", { class: "chip late" }, "difficile") : null,
+      el("span", { class: "actions" }, card.nouveau ? el("span", { class: "chip" }, "nouvelle") : null, card._pull ? el("span", { class: "chip exam" }, "tour avant examen") : null, (card.lapses || 0) >= 2 ? el("span", { class: "chip late" }, "difficile") : null,
         el("button", { class: "link", type: "button", onclick: () => { editCardId = card.id; showTab("cartes"); renderCardForm(card); $("cardForm").scrollIntoView({ block: "center" }); } }, "Modifier"))),
     s.label ? el("div", { class: "m" }, "Séance ciblée · " + s.label) : null,
     (() => { const ser = serieOf(card); if (!ser) return null; const mem = seriesMembers(ser.key), i = mem.findIndex(m => m.id === card.id); return mem.length > 1 && i >= 0 ? el("div", { class: "m" }, el("span", { class: "chip" }, "Exercice en " + mem.length + " parties · partie " + (i + 1) + "/" + mem.length), " à faire dans l'ordre") : null; })(),
@@ -1120,7 +1157,7 @@ async function rateCard(q) {
   if (q === 0) { s.ko++; s.queue.push(Object.assign({}, card, ns, { nouveau: false, _pull: null })); } else s.ok++;
   if (ser) { if (!s.serie || s.serie.key !== ser.key) s.serie = { key: ser.key, dues: {} }; if (q > 0) s.serie.dues[card.id] = ns.due; }
   s.idx++; s.shown = false; renderSession();
-  await write(() => db.doc("cartes/" + card.id).update(Object.assign({}, ns, { nouveau: false, vueLe: today() })));
+  await write(() => db.doc("cartes/" + card.id).update(Object.assign({}, ns, { nouveau: false, vueLe: today(), derniereNote: q })));
   // Fin du bloc d'une série : toutes ses parties reviennent le même jour (le plus proche), pour rester à la suite.
   if (ser && s.serie && s.serie.key === ser.key && (serieOf(s.queue[s.idx]) || {}).key !== ser.key) {
     const dues = s.serie.dues, d = Object.keys(dues).length >= 2 ? Object.values(dues).sort()[0] : null; s.serie = null;
