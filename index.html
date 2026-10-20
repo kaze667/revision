@@ -1086,7 +1086,22 @@ function buildQueue(randomize = true) {
   const pri = due.filter(c => priority(c) >= 80), rest = due.filter(c => priority(c) < 80);
   return expandSeries(shuffle(pri).concat(shuffle(rest.concat(nw))));
 }
-function nextState(card, q) {
+// Ce que le bouton doit annoncer en plus du délai : un retour plus tôt à cause d'un partiel proche.
+function rateHint(card, q, ns, info) {
+  if (q === 0) return "";
+  const t = today(), iv = diff(ns.due, t);
+  if (info && info.clamp && info.clamp.exam) return "partiel : au lieu de " + ivLabel(info.clamp.avant);
+  const k2 = Object.assign({}, card, ns, { derniereNote: q, nouveau: false, vueLe: t });
+  for (const ex of upcomingExams()) {
+    const d = diff(ex.date, t); if (d - 7 >= iv || !inExam(ex, card)) continue;
+    if (!(ns.due >= ex.date || cardFragile(k2))) continue;
+    // la boucle avant examen commence 7 jours avant le partiel
+    const g = Math.max(loopGap(k2, Math.min(d, 7)), d - 7);
+    if (g < iv && g <= d) return "partiel : dès " + ivLabel(g);
+  }
+  return "";
+}
+function nextState(card, q, info) {
   const t = today(), c = { ease: card.ease || 2.5, interval: card.interval || 0, reps: card.reps || 0, lapses: card.lapses || 0 };
   if (q === 0) { c.lapses += 1; c.reps = 0; c.interval = 0; c.ease = Math.max(1.3, c.ease - 0.2); }
   else {
@@ -1103,7 +1118,9 @@ function nextState(card, q) {
   if (q > 0 && dte !== null && dte > 7 && c.interval >= dte) { let h = 0;
     // une carte maîtrisée n'est ramenée qu'une fois, au début de la dernière semaine (J-6 à J-4)
     for (const ch of String(card.id || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const avant = c.interval;
     c.interval = cardMaitrisee(card) && q >= 2 ? Math.max(1, dte - 4 - (h % 3)) : Math.max(1, dte - 2 - (h % 5));
+    if (info) info.clamp = { exam: examFor(chapById(card.chapId)), avant };
   }
   c.due = addDays(t, c.interval);
   // Carte revue en avance (séance ciblée, série) : une bonne réponse ne rapproche jamais sa prochaine révision.
@@ -1136,19 +1153,21 @@ function renderSession() {
   }
   const card = s.queue[s.idx], chap = chapById(card.chapId);
   $("sessCount").textContent = (s.idx + 1) + " / " + s.queue.length;
-  const previews = [0, 1, 2, 3].map(q => nextState(card, q).interval);
+  const previews = [0, 1, 2, 3].map(q => { const info = {}, ns = nextState(card, q, info); return { iv: diff(ns.due, today()), hint: rateHint(card, q, ns, info) }; });
   const labels = ["Raté", "Difficile", "Bien", "Facile"];
   box.replaceChildren(el("div", { class: "flash" },
     el("div", { class: "progress" }, el("i", { style: "width:" + Math.round(100 * s.idx / Math.max(1, s.queue.length)) + "%" })),
     el("div", { class: "row" }, el("span", { class: "actions", style: "justify-content:flex-start" }, chap ? el("span", { class: "chip mat", style: mcStyle(chap.matiere) }, chap.matiere) : null, el("span", { class: "m" }, chap ? chap.titre : "Chapitre supprimé")),
-      el("span", { class: "actions" }, card.nouveau ? el("span", { class: "chip" }, "nouvelle") : null, card._pull ? el("span", { class: "chip exam" }, "tour avant examen") : null, (card.lapses || 0) >= 2 ? el("span", { class: "chip late" }, "difficile") : null,
+      el("span", { class: "actions" }, card.nouveau ? el("span", { class: "chip" }, "nouvelle") : null, card._pull ? el("span", { class: "chip exam" }, "tour avant examen") : null, card._avance && !card._pull ? el("span", { class: "chip muted", title: "Tu as lancé une séance sur ce chapitre : carte revue en avance, sa date prévue ne sera pas rapprochée" }, "en avance (prévue " + pretty(card.due) + ")") : null, (card.lapses || 0) >= 2 ? el("span", { class: "chip late" }, "difficile") : null,
         el("button", { class: "link", type: "button", onclick: () => { editCardId = card.id; showTab("cartes"); renderCardForm(card); $("cardForm").scrollIntoView({ block: "center" }); } }, "Modifier"))),
     s.label ? el("div", { class: "m" }, "Séance ciblée · " + s.label) : null,
     (() => { const ser = serieOf(card); if (!ser) return null; const mem = seriesMembers(ser.key), i = mem.findIndex(m => m.id === card.id); return mem.length > 1 && i >= 0 ? el("div", { class: "m" }, el("span", { class: "chip" }, "Exercice en " + mem.length + " parties · partie " + (i + 1) + "/" + mem.length), " à faire dans l'ordre") : null; })(),
     el("div", { class: "side" }, renderFace(card, "recto")),
     s.shown ? el("div", { class: "side verso" }, renderFace(card, "verso")) : null,
     s.shown
-      ? el("div", { class: "rate" }, [0, 1, 2, 3].map(q => el("button", { type: "button", class: "r" + q, onclick: () => rateCard(q) }, labels[q], el("small", {}, ivLabel(previews[q])))))
+      ? [el("div", { class: "rate" }, [0, 1, 2, 3].map(q => el("button", { type: "button", class: "r" + q, onclick: () => rateCard(q) }, labels[q], el("small", {}, ivLabel(previews[q].iv)), previews[q].hint ? el("small", { style: "color:var(--exam)" }, previews[q].hint) : null))),
+        s.shown && serieOf(card) && seriesMembers(serieOf(card).key).length > 1 ? el("div", { class: "hint" }, "Exercice en plusieurs parties : toutes les parties reviendront ensemble, à la date la plus proche que tu choisis dans la série.") : null,
+        s.shown && previews.some(p => p.hint) ? el("div", { class: "hint" }, "En orange : carte au programme de ton partiel de " + ((examFor(chapById(card.chapId)) || {}).matiere || "") + " (" + pretty((examFor(chapById(card.chapId)) || {}).date) + "). Elle revient plus tôt que son délai normal pour être revue avant l'examen ; sinon, elle ne reviendra pas avant le délai affiché.") : null]
       : el("button", { class: "primary", type: "button", id: "revealBtn", onclick: () => { s.shown = true; renderSession(); } }, "Afficher la réponse")));
 }
 async function rateCard(q) {
@@ -1748,7 +1767,7 @@ function startSession(opts) {
     if (due.length + fresh.length < 12) {
       const taken = new Set(due.concat(fresh).map(c => c.id));
       const recent = addDays(t, -2);
-      extra = pool.filter(c => !taken.has(c.id) && !(c.vueLe && c.vueLe >= recent)).sort((a, b) => (b.lapses || 0) - (a.lapses || 0) || (a.interval || 0) - (b.interval || 0)).slice(0, 20 - due.length - fresh.length);
+      extra = pool.filter(c => !taken.has(c.id) && !(c.vueLe && c.vueLe >= recent)).sort((a, b) => (b.lapses || 0) - (a.lapses || 0) || (a.interval || 0) - (b.interval || 0)).slice(0, 20 - due.length - fresh.length).map(c => Object.assign({}, c, { _avance: true }));
     }
     queue = expandSeries(shuffle(due.concat(fresh, extra)));
   } else queue = buildQueue(true);
