@@ -834,21 +834,114 @@ function bindDebut(dateId, debutId, lightId, hintId) {
   return () => { delete db0.dataset.touched; db0.value = dv.value; refresh(); };
 }
 
-/* ---- Questions du jour : tous les cours, priorité aux examens proches ---- */
-function briefPool() {
-  const due = new Map();
-  for (const it of dueItems()) if (it.kind === "chap" && !due.has(it.doc.id)) due.set(it.doc.id, it.s.code);
-  const scored = chapitres.map(c => {
-    const dte = daysToExam(c), weak = cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).length, exam = dte !== null && dte <= 21;
-    let score = (exam ? 120 - dte * 5 : 0) + (due.has(c.id) ? 30 : 0) + (5 - (c.niveau || 1)) * 4 + Math.min(weak, 5) * 3 + Math.min((c.pointsFaibles || []).length, 5) + Math.random() * 8;
-    return { c, score, exam, etape: exam ? "examen dans " + dte + " j" : due.get(c.id) || "entretien" };
-  }).sort((a, b) => b.score - a.score);
-  const out = [], mats = new Set();
-  for (const x of scored) if (!mats.has(x.c.matiere)) { mats.add(x.c.matiere); out.push(x); }
-  for (const x of scored) if (out.length < 8 && !out.includes(x)) out.push(x);
-  return out.sort((a, b) => b.score - a.score).slice(0, 8);
+/* ---- Questions du jour : adaptées au planning du jour, aux examens proches et variées ---- */
+const Q_TYPES = {
+  def: "définition précise", formule: "formule + conditions d'application", meca: "mécanisme / intuition économique (pourquoi ?)",
+  appli: "application chiffrée courte", methode: "méthode : comment résoudre ce type d'exercice", piege: "piège classique ou vrai/faux à justifier",
+  compar: "comparer deux notions proches", lien: "lien avec un autre chapitre ou une autre matière", erreur: "trouver l'erreur dans un raisonnement faux",
+  partiel: "question type partiel (calcul ou rédaction en plusieurs étapes)", graph: "graphique décrit en texte (lire, construire, déplacer une courbe)", explique: "expliquer avec ses mots à un débutant"
+};
+// Types adaptés au moment : étape du calendrier, tour du planning, distance à l'examen.
+function briefTypes(stage, tour, dte) {
+  const out = [], add = arr => arr.forEach(x => { if (!out.includes(x)) out.push(x); });
+  if (dte !== null && dte <= 1) add(["formule", "piege", "methode", "def"]);          // veille / jour J : points clés, pas de nouveauté
+  else if (dte !== null && dte <= 7) add(["partiel", "appli", "methode", "erreur", "piege"]);
+  if (tour) add(tour.tour === 1 ? ["def", "meca", "formule", "compar"] : tour.tour >= tour.tours ? ["partiel", "appli", "erreur"] : ["appli", "methode", "piege", "lien"]);
+  if (stage === "J0" || stage === "J1") add(["def", "meca", "formule"]);
+  if (stage === "J3") add(["appli", "lien", "methode"]);
+  if (stage === "J7") add(["explique", "compar", "lien", "graph"]);
+  if (stage === "J30") add(["partiel", "appli", "erreur"]);
+  if (dte !== null && dte <= 21) add(["partiel", "appli", "piege"]);
+  add(["appli", "piege", "compar", "graph", "meca", "erreur", "partiel"]);           // entretien : on varie
+  return out;
 }
-const BRIEF_RULE = "Répartition : couvre toutes les matières listées (au moins une question chacune) ; s'il y a des chapitres marqués « examen dans N j », donne-leur au moins la moitié des questions, d'autant plus que l'examen est proche, en questions type partiel.";
+function briefPlan(recentQs) {
+  const t = today(), planDay = computePlan().get(t) || [], planChap = planDay.filter(x => x.kind === "chap");
+  const dueMap = new Map(); for (const it of dueItems()) if (it.kind === "chap" && !dueMap.has(it.doc.id)) dueMap.set(it.doc.id, it.s.code);
+  const rows = chapitres.map(c => {
+    const ex = examFor(c), dte = ex ? diff(ex.date, t) : null, tour = planChap.find(x => x.chapId === c.id) || null, stage = dueMap.get(c.id) || null;
+    const ks = cartes.filter(k => k.chapId === c.id), hard = ks.filter(k => (k.lapses || 0) >= 2).map(k => k.recto).slice(0, 4);
+    const lowEx = (c.historiqueExos || []).filter(h => h.note <= 5).slice(-3).map(h => h.titre);
+    const seen = (c.etapes || []).map(s => s.fait).concat(ks.map(k => k.vueLe), (c.historiqueExos || []).map(h => h.date)).filter(Boolean).sort();
+    const idle = seen.length ? diff(t, seen[seen.length - 1]) : 30;
+    let w = 1 + (5 - (c.niveau || 1)) * 0.5 + Math.min(hard.length, 5) * 0.4 + Math.min((c.pointsFaibles || []).length, 4) * 0.4 + (idle >= 7 ? 1.5 : 0);
+    const raisons = [];
+    if (stage) { w += 4; raisons.push("révision " + stage + " prévue aujourd'hui"); }
+    if (tour) { w += 4; raisons.push("planning du jour : tour " + tour.tour + "/" + tour.tours + " pour « " + tour.exam.intitule + " »"); }
+    if (dte !== null && dte <= 21) { w += dte <= 2 ? 8 : dte <= 7 ? 6 : 3; raisons.push("examen " + (dte === 0 ? "aujourd'hui" : dte === 1 ? "demain" : "dans " + dte + " j") + " (" + ex.intitule + ")"); }
+    if (idle >= 7) raisons.push("pas travaillé depuis " + idle + " j (entretien)");
+    return { c, w, raisons, dte, tour, stage, hard, lowEx, types: briefTypes(stage, tour, dte), slots: 0 };
+  }).sort((a, b) => b.w - a.w);
+  const chosen = [], mats = new Set();
+  for (const r of rows) if (!mats.has(r.c.matiere)) { mats.add(r.c.matiere); chosen.push(r); }
+  for (const r of rows) if (chosen.length < 8 && !chosen.includes(r)) chosen.push(r);
+  const pick = chosen.slice(0, Math.max(8, mats.size)), TOTAL = 10;
+  pick.forEach(r => r.slots = 1);
+  let used = pick.length;
+  while (used < TOTAL && pick.length) {
+    const r = pick.filter(x => x.slots < 3).sort((a, b) => b.w / (b.slots + 1) - a.w / (a.slots + 1))[0]; if (!r) break; r.slots++; used++;
+  }
+  // Examen proche : au moins la moitié des questions sur son programme (70 % à 7 jours ou moins).
+  const exR = pick.filter(r => r.dte !== null && r.dte <= 21);
+  if (exR.length) {
+    const target = Math.ceil(used * (exR.some(r => r.dte <= 7) ? 0.7 : 0.5));
+    let guard = 20;
+    while (guard-- && exR.reduce((a, r) => a + r.slots, 0) < target) {
+      const from = pick.filter(r => !exR.includes(r) && r.slots > 1).sort((a, b) => b.slots - a.slots)[0];
+      const to = exR.filter(r => r.slots < 4).sort((a, b) => (a.dte - b.dte) || (b.w - a.w))[0];
+      if (!from || !to) break; from.slots--; to.slots++;
+    }
+  }
+  // Types : ceux du moment, en évitant ceux déjà posés sur ce chapitre les jours précédents
+  // et en variant d'un chapitre à l'autre (au plus 2 questions du même type dans la journée si possible).
+  const usage = {};
+  for (const r of [...pick].sort((a, b) => b.w - a.w)) {
+    const recentT = new Set(recentQs.filter(q => q.chapitre === r.c.titre).map(q => q.type));
+    r.qtypes = [];
+    for (let n = 0; n < r.slots; n++) {
+      const cand = r.types.filter(x => !r.qtypes.includes(x)).map((x, idx) => ({ x, score: idx + (recentT.has(x) ? 4 : 0) + (usage[x] || 0) * 3 })).sort((a, b) => a.score - b.score)[0];
+      const x = cand ? cand.x : r.types[n % r.types.length];
+      r.qtypes.push(x); usage[x] = (usage[x] || 0) + 1;
+    }
+  }
+  return { rows: pick.filter(r => r.slots > 0), blanc: planDay.filter(x => x.kind === "blanc") };
+}
+async function recentBriefQuestions(n = 3) {
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    try { const s = await db.doc("briefs/" + addDays(today(), -i)).get(); if (!s.exists) continue; const b = s.data(); for (const m of ["jour", "matin", "soir"]) if (b[m] && Array.isArray(b[m].questions)) out.push(...b[m].questions); } catch (e) {}
+  }
+  return out;
+}
+function briefPrompt(plan, recentQs) {
+  const lines = plan.rows.map(r => {
+    const c = r.c;
+    return "- " + c.matiere + " · " + c.titre + " → " + r.slots + " question" + (r.slots > 1 ? "s" : "") + " de type : " + r.qtypes.map(x => x + " (" + Q_TYPES[x] + ")").join(" ; ") +
+      (r.raisons.length ? "\n  Pourquoi aujourd'hui : " + r.raisons.join(" ; ") : "") +
+      "\n  Niveau en exercices : " + (c.niveau || 1) + "/5" + (c.notions ? " ; notions : " + c.notions : "") +
+      ((c.pointsFaibles || []).length ? "\n  Points faibles : " + c.pointsFaibles.join(" / ") : "") +
+      (r.hard.length ? "\n  Cartes souvent ratées : " + r.hard.join(" / ") : "") +
+      (r.lowEx.length ? "\n  Exercices ratés récemment : " + r.lowEx.join(" / ") : "");
+  });
+  const exams = upcomingExams().filter(e => diff(e.date, today()) <= 21).map(e => e.matiere + " (" + e.intitule + ") " + pretty(e.date) + ", J-" + diff(e.date, today()));
+  return [
+    "Tu prépares les questions de rappel actif du jour pour " + etu() + ". Objectif : les révisions les plus efficaces possibles aujourd'hui (rappel actif, entrelacement, difficulté désirable, ciblage des erreurs).",
+    exams.length ? "Examens à venir : " + exams.join(" ; ") + "." : "",
+    plan.blanc.length ? "Aujourd'hui, le planning prévoit aussi un examen blanc de " + plan.blanc.map(b => b.exam.matiere).join(", ") + " : ne le dévoile pas, prépare plutôt les méthodes utiles." : "",
+    "Répartition imposée (chapitre → nombre de questions et types à utiliser, dans cet ordre de préférence) :\n" + lines.join("\n"),
+    "Types : " + Object.entries(Q_TYPES).map(([k, v]) => k + " = " + v).join(" ; ") + ".",
+    "Règles : respecte le nombre et les types demandés ; jamais deux questions de suite sur la même matière ; vise un niveau légèrement au-dessus du niveau indiqué (effort de mémoire) sans dépasser le programme ; cible d'abord les points faibles, cartes ratées et exercices ratés ; pour le type « erreur », écris le raisonnement faux dans la question ; pour « partiel », une question complète mais faisable en 3 à 5 minutes ; la veille et le jour d'un examen, uniquement les points clés et les pièges, aucune notion nouvelle. Réponse exacte et courte (2 à 4 lignes pour « partiel », avec la méthode). Formules en texte Unicode, sans LaTeX.",
+    recentQs.length ? "Questions déjà posées ces derniers jours (n'en pose pas de semblables, change d'angle) :\n- " + recentQs.slice(0, 30).map(q => q.q).join("\n- ") : "",
+    "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases : ce qui est au programme aujourd'hui et pourquoi), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"type\": string (une clé de la liste), \"q\": string, \"r\": string}]}"
+  ].filter(Boolean).join("\n\n");
+}
+// Entrelacement garanti : on évite deux questions de suite sur la même matière.
+function interleaveQs(qs) {
+  const left = qs.slice(), out = [];
+  while (left.length) { const prev = out.length ? out[out.length - 1].matiere : null; let i = left.findIndex(q => q.matiere !== prev); if (i < 0) i = 0; out.push(left.splice(i, 1)[0]); }
+  return out;
+}
+const cleanQs = arr => interleaveQs(arr.slice(0, 10).map(q => ({ matiere: String(q.matiere || ""), chapitre: String(q.chapitre || ""), type: Q_TYPES[q.type] ? q.type : "", q: String(q.q || ""), r: String(q.r || "") })));
 
 /* ================= Calendrier (Aujourd'hui) ================= */
 function dueItems() {
@@ -953,7 +1046,7 @@ function renderBrief() {
     const card = el("div", { class: "panel" }, el("div", {}, el("span", { class: "chip" }, moment === "matin" ? "Ce matin" : moment === "soir" ? "Ce soir" : "Aujourd'hui")), b.resume ? el("p", {}, b.resume) : null);
     const qs = Array.isArray(b.questions) ? b.questions : [];
     if (qs.length) card.append(el("ol", { class: "qs" }, qs.map(q => el("li", {},
-      el("div", {}, el("div", {}, q.q || ""), el("div", { class: "qm" }, [q.matiere, q.chapitre].filter(Boolean).join(" · "))),
+      el("div", {}, el("div", {}, q.q || ""), el("div", { class: "qm" }, [q.matiere, q.chapitre, q.type && typeof Q_TYPES !== "undefined" && Q_TYPES[q.type] ? Q_TYPES[q.type] : q.type].filter(Boolean).join(" · "))),
       q.r ? el("details", {}, el("summary", {}, "Vérifier ma réponse"), el("div", {}, q.r)) : null))));
     box.append(card);
   }
@@ -1873,6 +1966,13 @@ function chapNeed(c) {
   const fresh = ks.filter(k => k.nouveau).length;
   return (5 - (c.niveau || 1)) + Math.min(3, (c.pointsFaibles || []).length) + Math.min(3, lapses / 4) + (fresh > 10 ? 1 : 0);
 }
+// Jours (avant aujourd'hui) où une tâche du planning dont la clé commence par « prefix » a été cochée.
+let planHist = {};
+function planDoneDays(prefix) {
+  const t = today(), out = [];
+  for (const [d, done] of Object.entries(planHist)) if (d < t && (done || []).some(k => String(k).startsWith(prefix))) out.push(d);
+  return out.sort();
+}
 function computePlan() {
   const t = today(), days = new Map();
   const cap = 3, add = (d, task) => { if (!days.has(d)) days.set(d, []); days.get(d).push(task); };
@@ -1881,7 +1981,7 @@ function computePlan() {
     for (let off = 0; off <= hi - lo; off++) for (const cand of [idx - off, idx + off]) {
       if (cand < lo || cand > hi) continue;
       const d = addDays(t, cand);
-      if (task.kind !== "chap" || load(d) < cap) { add(d, Object.assign({ date: d }, task)); return; }
+      if (task.kind === "chap" ? load(d) < cap : !(days.get(d) || []).some(x => x.kind === "blanc")) { add(d, Object.assign({ date: d }, task)); return; }
     }
     add(addDays(t, Math.max(lo, Math.min(hi, idx))), Object.assign({ date: addDays(t, Math.max(lo, Math.min(hi, idx))) }, task));
   };
@@ -1890,12 +1990,19 @@ function computePlan() {
     if (last < 0) continue;
     const chs = examChapters(e).sort((a, b) => chapNeed(b) - chapNeed(a));
     if (!chs.length) continue;
-    if (last >= 3) place({ kind: "blanc", key: e.id + "|blanc", examId: e.id, exam: e }, last - 1, 0, last);
+    // Examen blanc vers J-3 (un seul par jour, entre J-6 et J-2), tant qu'il n'a pas été fait.
+    const blancFait = blancs.some(b => b.examId === e.id && b.statut === "corrige" && b.corrigeLe && b.corrigeLe < t) || planDoneDays(e.id + "|blanc").length;
+    if (D - 2 >= 0 && !blancFait) place({ kind: "blanc", key: e.id + "|blanc", examId: e.id, exam: e }, Math.max(0, D - 3), Math.max(0, D - 6), D - 2);
     chs.forEach((c, i) => {
       const s = Math.max(1, Math.min(4, Math.round(1 + chapNeed(c) / 2.5), last + 1));
-      for (let k = 0; k < s; k++) {
-        const pos = Math.min(last, Math.floor(((k + 0.35 + 0.3 * ((i % 3) / 2)) * (last + 1)) / s));
-        place({ kind: "chap", key: e.id + "|" + c.id + "|" + k, examId: e.id, exam: e, chapId: c.id, chap: c, tour: k + 1, tours: s }, pos, 0, last);
+      // Mémoire du planning : les tours déjà faits les jours précédents ne sont pas reprogrammés,
+      // les suivants se répartissent sur les jours qui restent (au moins un jour après le dernier tour fait).
+      const doneDays = planDoneDays(e.id + "|" + c.id + "|"), fait = Math.min(s, doneDays.length), reste = s - fait;
+      const first = doneDays.length && doneDays[doneDays.length - 1] === addDays(t, -1) && last >= 1 ? 1 : 0;
+      for (let j = 0; j < reste; j++) {
+        const k = fait + j;
+        const pos = Math.min(last, first + Math.floor(((j + 0.3 * ((i % 3) / 2)) * (last + 1 - first)) / reste));
+        place({ kind: "chap", key: e.id + "|" + c.id + "|" + k, examId: e.id, exam: e, chapId: c.id, chap: c, tour: k + 1, tours: s }, pos, first, last);
       }
     });
   }
@@ -2185,6 +2292,7 @@ function setupExtras() {
 function subscribeExtras() {
   db.collection("blancs").onSnapshot(s => { blancs = s.docs.map(d => Object.assign({ id: d.id }, d.data())); renderBlancs(); }, () => {});
   db.doc("plan/" + today()).onSnapshot(s => { planJour = s.exists ? s.data() : null; renderPlan(); }, () => {});
+  db.collection("plan").onSnapshot(s => { planHist = {}; for (const d of s.docs) if (/^\d{4}-\d{2}-\d{2}$/.test(d.id)) planHist[d.id] = (d.data() || {}).done || []; renderPlan(); snapshotPlan(); }, () => {});
 }
 
 /* =====================================================================
@@ -2225,7 +2333,7 @@ function renderBrief() {
     const card = el("div", { class: "panel" }, el("div", {}, el("span", { class: "chip" }, moment === "matin" ? "Ce matin" : moment === "soir" ? "Ce soir" : "Aujourd'hui")), b.resume ? el("p", {}, b.resume) : null);
     const qs = Array.isArray(b.questions) ? b.questions : [];
     if (qs.length) card.append(el("ol", { class: "qs" }, qs.map(q => el("li", {},
-      el("div", {}, el("div", {}, q.q || ""), el("div", { class: "qm" }, [q.matiere, q.chapitre].filter(Boolean).join(" · "))),
+      el("div", {}, el("div", {}, q.q || ""), el("div", { class: "qm" }, [q.matiere, q.chapitre, q.type && typeof Q_TYPES !== "undefined" && Q_TYPES[q.type] ? Q_TYPES[q.type] : q.type].filter(Boolean).join(" · "))),
       q.r ? el("details", {}, el("summary", {}, "Vérifier ma réponse"), el("div", {}, q.r)) : null))));
     box.append(card);
   }
@@ -2237,23 +2345,14 @@ async function generateBrief() {
   $("briefBox").replaceChildren(busy("Préparation de tes questions…"));
   try {
     const t = today();
-    let pool = briefPool();
-    if (!pool.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
-    const lines = pool.map(({ c, etape }) => {
-      const hard = cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).slice(0, 4).map(k => k.recto);
-      return "- " + c.matiere + " · " + c.titre + " (étape " + etape + ")" + (c.notions ? " ; notions : " + c.notions : "") + ((c.pointsFaibles || []).length ? " ; points faibles : " + c.pointsFaibles.join(" / ") : "") + (hard.length ? " ; cartes souvent ratées : " + hard.join(" / ") : "");
-    });
-    const prompt = [
-      "Tu prépares les questions de rappel actif du jour pour " + etu() + ".",
-      "Chapitres à travailler aujourd'hui (tous les cours, du plus prioritaire au moins prioritaire) :\n" + lines.join("\n"),
-      BRIEF_RULE,
-      "Règles : au plus 10 questions, mélange les matières (entrelacement). Selon l'étape : J1 = définitions et mécanismes ; J3 = application + une question qui relie deux chapitres ; J7 = expliquer avec ses mots, liens entre notions ; J30, examen et entretien = questions type partiel. Cible en priorité les points faibles et les cartes souvent ratées. Réponse courte et exacte pour chaque question. Formules en texte Unicode, sans LaTeX.",
-      "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases sur le programme du jour), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"q\": string, \"r\": string}]}"
-    ].join("\n\n");
+    const recentQs = await recentBriefQuestions(3);
+    const plan = briefPlan(recentQs);
+    if (!plan.rows.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
+    const prompt = briefPrompt(plan, recentQs);
     const r = await sample.json(prompt, { cache: false });
     if (!r || !Array.isArray(r.questions)) throw { code: "invalid_json" };
     const cur = brief ? clone(brief) : {};
-    cur.jour = { genereLe: new Date().toISOString(), resume: String(r.resume || ""), questions: r.questions.slice(0, 10).map(q => ({ matiere: String(q.matiere || ""), chapitre: String(q.chapitre || ""), q: String(q.q || ""), r: String(q.r || "") })) };
+    cur.jour = { genereLe: new Date().toISOString(), resume: String(r.resume || ""), questions: cleanQs(r.questions) };
     await write(() => db.doc("briefs/" + t).set(cur));
   } catch (e) { $("briefBox").replaceChildren(el("div", { class: "notice" }, sampleMsg(e))); }
   finally { btn.disabled = false; }
@@ -2911,20 +3010,14 @@ async function generateBrief() {
   $("briefBox").replaceChildren(busy("L'IA prépare tes questions…"));
   try {
     const t = today();
-    let pool = briefPool();
-    if (!pool.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
-    const lines = pool.map(({ c, etape }) => "- " + c.matiere + " · " + c.titre + " (étape " + etape + ")" + (c.notions ? " ; notions : " + c.notions : "") + ((c.pointsFaibles || []).length ? " ; points faibles : " + c.pointsFaibles.join(" / ") : "") + (cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).length ? " ; cartes souvent ratées : " + cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).slice(0, 4).map(k => k.recto).join(" / ") : ""));
-    const prompt = [
-      "Tu prépares les questions de rappel actif du jour pour " + etu() + ".",
-      "Chapitres à travailler aujourd'hui (tous les cours, du plus prioritaire au moins prioritaire) :\n" + lines.join("\n"),
-      BRIEF_RULE,
-      "Règles : au plus 10 questions, mélange les matières (entrelacement). Selon l'étape : J1 = définitions et mécanismes de base ; J3 = application + une question qui relie deux chapitres ; J7 = expliquer avec ses mots, liens entre notions ; J30, examen et entretien = questions type partiel. Cible en priorité les points faibles et les cartes souvent ratées. Réponse courte et exacte pour chaque question. Formules en texte Unicode, sans LaTeX.",
-      "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases sur le programme du jour), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"q\": string, \"r\": string}]}"
-    ].join("\n\n");
+    const recentQs = await recentBriefQuestions(3);
+    const plan = briefPlan(recentQs);
+    if (!plan.rows.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
+    const prompt = briefPrompt(plan, recentQs);
     const r = await AI.json(prompt);
     if (!r || !Array.isArray(r.questions)) throw { code: "invalid_json" };
     const cur = brief ? clone(brief) : {};
-    cur.jour = { genereLe: new Date().toISOString(), resume: String(r.resume || ""), questions: r.questions.slice(0, 10).map(q => ({ matiere: String(q.matiere || ""), chapitre: String(q.chapitre || ""), q: String(q.q || ""), r: String(q.r || "") })) };
+    cur.jour = { genereLe: new Date().toISOString(), resume: String(r.resume || ""), questions: cleanQs(r.questions) };
     await write(() => db.doc("briefs/" + t).set(cur));
   } catch (e) { $("briefBox").replaceChildren(el("div", { class: "notice" }, sampleMsg(e))); }
   finally { btn.disabled = false; }
