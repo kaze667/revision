@@ -217,7 +217,7 @@ function registerIpc() {
   ipcMain.handle("file:saveAs", guard(async (name, text) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath("documents"), safeName(name)) });
     if (r.canceled || !r.filePath) return false;
-    fs.writeFileSync(r.filePath, String(text), "utf8");
+    if (typeof text === "string") fs.writeFileSync(r.filePath, text, "utf8"); else fs.writeFileSync(r.filePath, Buffer.from(text));
     return true;
   }));
   ipcMain.handle("app:openExternal", guard(url => { if (/^https:\/\//i.test(url)) shell.openExternal(url); }));

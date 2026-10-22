@@ -6,7 +6,7 @@ const info = ipcRenderer.sendSync("app:info") || {};
 const call = (ch, ...args) => ipcRenderer.invoke(ch, ...args);
 
 contextBridge.exposeInMainWorld("desktop", {
-  apiVersion: 1,
+  apiVersion: 2,
   version: info.version,
   platform: info.platform,
   store: {

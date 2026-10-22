@@ -14,6 +14,9 @@ const plural = (n, one, many) => n + " " + (n > 1 ? many : one);
 
 // Temps de révision du jour (plan/reglages) : exception datée > semaine type > temps général (90 min par défaut). 0 = jour off.
 function budgetFor(rows, date) {
+  // L'aperçu écrit par l'appli tient compte de l'emploi du temps (jours chargés) : on le préfère quand il couvre ce jour.
+  const ap = (rows.find(x => x.coll === "plan" && x.id === "apercu") || {}).data || {};
+  if (ap.temps && ap.temps[date] !== undefined && ap.majLe && diffDays(date, ap.majLe) <= 6) { const v = Number(ap.temps[date]); if (isFinite(v)) return v <= 0 ? 0 : Math.max(15, Math.min(600, v)); }
   const r = (rows.find(x => x.coll === "plan" && x.id === "reglages") || {}).data || {};
   const ex = r.exceptions || {}, sem = Array.isArray(r.semaine) ? r.semaine : [];
   const [y, m, d] = date.split("-").map(Number), wd = new Date(y, m - 1, d).getDay();
