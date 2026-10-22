@@ -308,6 +308,8 @@ details.panel > summary { font-size: 14.5px; }
 .budget-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .budget-row input { max-width: 96px; }
 details.more > summary { padding: 4px 2px; }
+.dayrow { display: grid; grid-template-columns: 90px 110px auto; gap: 8px; align-items: center; color: var(--ink); font-weight: 500; justify-content: start; }
+.dayrow input { padding: 6px 10px; }
 </style>
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
@@ -361,6 +363,7 @@ details.more > summary { padding: 4px 2px; }
     <div class="stats" id="statsBox"></div>
     <section id="budgetSec">
       <h2>Ton temps aujourd'hui <span class="count" id="budgetCount"></span></h2>
+      <div id="guideBox"></div>
       <div id="budgetBox"></div>
     </section>
     <section>
@@ -973,8 +976,18 @@ const cleanQs = arr => interleaveQs(arr.slice(0, 10).map(q => ({ matiere: String
 let reglages = { minutesJour: 90 }, budgetSaveT = null;
 const STAGE_MIN = { J0: 10, J1: 10, J3: 15, J7: 15, J30: 20 };
 const EXAM_STEP_MIN = { "Veille": 30, "Jour J": 15 };
-const TOUR_CARTES = 10, EXO_MIN = 20, ATELIER_MIN = 15, BLANC_MIN = 90;
-const budgetJour = () => Math.max(15, Math.min(600, Number(reglages && reglages.minutesJour) || 90));
+const TOUR_CARTES = 10, EXO_BASE = 20, ATELIER_MIN = 15, BLANC_MIN = 90;
+const JOURS_LONG = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+// Temps d'un jour : exception datée (jour off = 0, ou temps particulier) > semaine type > temps général.
+function budgetBrut(d) {
+  const r = reglages || {}, ex = r.exceptions || {}, sem = Array.isArray(r.semaine) ? r.semaine : [];
+  const wd = parse(d).getDay();
+  const v = ex[d] !== undefined && ex[d] !== null ? ex[d] : sem[wd] !== undefined && sem[wd] !== null && sem[wd] !== "" ? sem[wd] : r.minutesJour;
+  const m = Number(v);
+  return isFinite(m) ? m : 90;
+}
+function budgetJour(d) { const m = budgetBrut(d || today()); return m <= 0 ? 0 : Math.max(15, Math.min(600, m)); }
+const jourOff = d => budgetJour(d || today()) === 0;
 const fmtMin = m => { m = Math.max(0, Math.round(m)); return m < 60 ? m + " min" : Math.floor(m / 60) + " h" + (m % 60 ? " " + pad(m % 60) : ""); };
 function recentStats() { const t = today(); return statsAll.filter(s => s.id >= addDays(t, -13) && s.id <= t); }
 // Secondes par carte : mesurées entre l'affichage de la question et la note (45 s tant qu'il y a moins de 20 mesures).
@@ -1000,9 +1013,9 @@ function spentToday() {
   const t = today(), st = statsJour || {}, sec = cardSeconds();
   const cards = ((st.secondes || 0) + Math.max(0, (st.revues || 0) - (st.chrono || 0)) * sec) / 60;
   let cal = 0;
-  for (const c of chapitres) for (const x of c.etapes || []) if (x.fait === t) cal += STAGE_MIN[x.code] || 10;
-  for (const e of examens) for (const x of e.etapes || []) if (x.fait === t) cal += EXAM_STEP_MIN[x.code] || 15;
-  const exos = exercices.filter(x => x.corrigeLe === t).length * EXO_MIN;
+  for (const c of chapitres) for (const x of c.etapes || []) if (x.fait === t) cal += stageMin(x.code);
+  for (const e of examens) for (const x of e.etapes || []) if (x.fait === t) cal += examStepMin(x.code);
+  const exos = exercices.filter(x => x.corrigeLe === t).length * exoMin();
   const bl = blancs.filter(b => b.corrigeLe === t).reduce((a, b) => a + (b.dureeReelle || b.duree || 60), 0);
   const at = ateliers.filter(a => a.creeLe === t).length * ATELIER_MIN;
   return Math.max(cards + cal + exos + bl + at, st.minutes || 0);
@@ -1014,7 +1027,7 @@ function dayProgram() {
   const parts = { examen: 0, cartes: 0, memo: 0, prepa: 0, nouvelles: 0, exo: 0 };
   const take = (k, m) => { parts[k] += m; R -= m; };
   const items = dueItems(), done = (planJour && planJour.done) || [];
-  for (const it of items) if (it.kind === "exam") take("examen", EXAM_STEP_MIN[it.s.code] || 15);
+  for (const it of items) if (it.kind === "exam") take("examen", examStepMin(it.s.code));
   const planToday = (computePlan().get(t) || []).filter(x => !done.includes(x.key));
   const calChap = items.filter(it => it.kind === "chap");
   // Un tour de préparation sur un chapitre qui a aussi sa révision du calendrier aujourd'hui : une seule ligne.
@@ -1031,7 +1044,7 @@ function dayProgram() {
   // le reste du calendrier est repris après les tours s'il reste du temps.
   const memoCap = Math.max(0, R) * 0.6, later = [];
   for (const it of calSorted) {
-    const k = it.doc.id + "|" + it.i, m = (STAGE_MIN[it.s.code] || 10) + (merged.has(it.doc.id) ? TOUR_CARTES : 0);
+    const k = it.doc.id + "|" + it.i, m = stageMin(it.s.code) + (merged.has(it.doc.id) ? TOUR_CARTES : 0);
     cal.min[k] = m;
     if (parts.memo + m <= memoCap + 2 && m <= R + 2) { cal.fit.add(k); take("memo", m); } else later.push(k);
   }
@@ -1040,11 +1053,11 @@ function dayProgram() {
     if (x.kind === "chap" && merged.get(x.chapId) === x) {
       const calKey = calChap.filter(it => it.doc.id === x.chapId).map(it => it.doc.id + "|" + it.i)[0];
       if (!cal.fit.has(calKey)) { mergedLater.push([x, calKey]); continue; }
-      if (EXO_MIN <= R + 2) { prep.fit.add(x.key); take("prepa", EXO_MIN); } else prep.court.add(x.key);
+      if (exoMin() <= R + 2) { prep.fit.add(x.key); take("prepa", exoMin()); } else prep.court.add(x.key);
       continue;
     }
     if (x.kind === "blanc") { if (BLANC_MIN <= R + 5) { prep.fit.add(x.key); take("prepa", BLANC_MIN); } else prep.extra.add(x.key); continue; }
-    if (TOUR_CARTES + EXO_MIN <= R + 2) { prep.fit.add(x.key); take("prepa", TOUR_CARTES + EXO_MIN); }
+    if (TOUR_CARTES + exoMin() <= R + 2) { prep.fit.add(x.key); take("prepa", TOUR_CARTES + exoMin()); }
     else if (TOUR_CARTES <= R + 2) { prep.court.add(x.key); take("prepa", TOUR_CARTES); }
     else prep.extra.add(x.key);
   }
@@ -1053,30 +1066,237 @@ function dayProgram() {
   // Nouvelles cartes : ce qui tient aujourd'hui, et une quantité tenable dans la durée
   // (chaque nouvelle carte revient environ 4 fois le mois suivant : la moitié du temps quotidien doit suffire à ces retours).
   const perNew = cardMinutes(0, 1), doneNew = (statsJour && statsJour.nouvelles) || 0;
-  const durable = Math.max(3, Math.floor(B * 0.5 * 60 / cardSeconds() / 6));
+  const durable = B ? Math.max(3, Math.floor(B * 0.5 * 60 / cardSeconds() / 6)) : 0;
   const nNew = Math.max(0, Math.min(fresh.length, newLimit(), durable - doneNew, Math.floor(Math.max(0, R) / perNew)));
   take("nouvelles", nNew * perNew);
   // Reste du calendrier (retards) s'il reste du temps
   for (const k of later) { const m = cal.min[k]; if (m <= R + 2) { cal.fit.add(k); take("memo", m); } else cal.extra.add(k); }
   // tours réunis avec une révision du calendrier traitée dans ce second passage
-  for (const [x, ck] of mergedLater) { if (!cal.fit.has(ck)) prep.extra.add(x.key); else if (EXO_MIN <= R + 2) { prep.fit.add(x.key); take("prepa", EXO_MIN); } else prep.court.add(x.key); }
-  const exo = R >= EXO_MIN && !planToday.some(x => x.kind === "chap");
-  if (exo) take("exo", EXO_MIN);
+  for (const [x, ck] of mergedLater) { if (!cal.fit.has(ck)) prep.extra.add(x.key); else if (exoMin() <= R + 2) { prep.fit.add(x.key); take("prepa", exoMin()); } else prep.court.add(x.key); }
+  const exo = R >= exoMin() && !planToday.some(x => x.kind === "chap");
+  if (exo) take("exo", exoMin());
   const total = Object.values(parts).reduce((a, b) => a + b, 0);
   return { B, spent, parts, total, left: R, due: dueSorted, nRev, deferred: dueSorted.length - nRev, fresh, nNew, durable, cal, prep, exo };
 }
-function loadBudget() { return Math.max(20, Math.round(budgetJour() * 0.6 * 60 / cardSeconds())); }
-function setBudget(m) {
-  m = Math.max(15, Math.min(600, Math.round((Number(m) || 90) / 5) * 5));
-  reglages = Object.assign({}, reglages, { minutesJour: m });
+
+/* ---- Temps prévu / temps réel : les durées s'ajustent sur ton rythme ----
+   Exercice : durée mesurée entre la création et la correction (moyenne des 10 derniers).
+   Révisions du calendrier, veilles d'examen, ateliers : les jours où tu utilises le chrono 25/5, on compare
+   le temps chronométré (hors flashcards et exercices, déjà mesurés) au temps estimé ; facteur entre 0,6 et 2. */
+let calibCache = { k: null, v: null };
+function exoMin() {
+  const xs = exercices.filter(x => x.dureeMin > 0).sort((a, b) => String(b.corrigeLe).localeCompare(String(a.corrigeLe))).slice(0, 10);
+  if (!xs.length) return EXO_BASE;
+  const avg = xs.reduce((a, x) => a + x.dureeMin, 0) / xs.length, w = Math.min(1, xs.length / 5);
+  return Math.round(Math.max(8, Math.min(60, w * avg + (1 - w) * EXO_BASE)));
+}
+function calibInfo() {
+  const t = today();
+  const k = t + "|" + statsAll.map(x => x.id + ":" + (x.minutes || 0) + ":" + (x.revues || 0)).join(",") + "|" + chapitres.reduce((a, c) => a + (c.etapes || []).filter(x => x.fait).length, 0) + "|" + exercices.length + "|" + ateliers.length;
+  if (calibCache.k === k) return calibCache.v;
+  let real = 0, est = 0, n = 0;
+  for (const st of statsAll) {
+    if (st.id >= t || st.id < addDays(t, -21) || (st.minutes || 0) < 20) continue;
+    const d = st.id;
+    const cardsM = ((st.secondes || 0) + Math.max(0, (st.revues || 0) - (st.chrono || 0)) * 45) / 60;
+    const exosM = exercices.filter(x => x.corrigeLe === d).reduce((a, x) => a + (x.dureeMin || EXO_BASE), 0);
+    let e = 0;
+    for (const c of chapitres) for (const x of c.etapes || []) if (x.fait === d) e += STAGE_MIN[x.code] || 10;
+    for (const ex of examens) for (const x of ex.etapes || []) if (x.fait === d) e += EXAM_STEP_MIN[x.code] || 15;
+    e += ateliers.filter(a => a.creeLe === d).length * ATELIER_MIN;
+    const r = st.minutes - cardsM - exosM;
+    if (e >= 10 && r > 0) { real += r; est += e; n++; }
+  }
+  const v = { f: n >= 3 ? Math.max(0.6, Math.min(2, real / est)) : 1, n, real: Math.round(real), est: Math.round(est) };
+  calibCache = { k, v };
+  return v;
+}
+const stageMin = code => Math.round((STAGE_MIN[code] || 10) * calibInfo().f);
+const examStepMin = code => Math.round((EXAM_STEP_MIN[code] || 15) * calibInfo().f);
+
+/* ---- Rattrapage automatique : les révisions de cours en attente sont réparties sur les jours suivants ----
+   Aujourd'hui = ce que le programme du jour garde ; ensuite, chaque jour reçoit au plus la moitié de son temps
+   en révisions de cours (rien les jours off), les plus anciennes d'abord. Les dates prévues ne sont pas modifiées :
+   c'est un aperçu, recalculé à chaque changement. */
+function calMinMap() {
+  const t = today(), m = new Map();
+  for (const c of chapitres) for (const x of c.etapes || []) if (!x.fait && x.due) { const d = x.due < t ? t : x.due; m.set(d, (m.get(d) || 0) + stageMin(x.code)); }
+  return m;
+}
+function calSchedule(p) {
+  const t = today(); p = p || dayProgram();
+  const out = new Map(), pending = [];
+  for (const c of chapitres) (c.etapes || []).forEach((x, i) => { if (!x.fait && x.due) pending.push({ key: c.id + "|" + i, code: x.code, due: x.due }); });
+  for (const x of pending) if (x.due <= t && p.cal.fit.has(x.key)) out.set(x.key, t);
+  let queue = pending.filter(x => !out.has(x.key)).sort((a, b) => a.due.localeCompare(b.due));
+  for (let k = 1; k <= 45 && queue.length; k++) {
+    const d = addDays(t, k), B = budgetJour(d);
+    let cap = B * 0.5; const rest = [];
+    for (const x of queue) {
+      const m = stageMin(x.code);
+      if (x.due <= d && B > 0 && m <= cap + 2) { out.set(x.key, d); cap -= m; } else rest.push(x);
+    }
+    queue = rest;
+  }
+  return out;
+}
+
+/* ---- Alerte de surcharge avant un partiel ---- */
+function examAlerts() {
+  const t = today(), out = [], calMin = calMinMap();
+  for (const e of upcomingExams()) {
+    const D = diff(e.date, t); if (D < 2 || D > 21) continue;
+    const chs = examChapters(e); if (!chs.length) continue;
+    const tour = TOUR_CARTES + exoMin();
+    const doneTours = chs.reduce((a, c) => a + planDoneDays(e.id + "|" + c.id + "|").length, 0);
+    const need = Math.max(0, chs.reduce((a, c) => a + Math.max(1, Math.min(4, Math.round(1 + chapNeed(c) / 2.5), D - 1)), 0) - doneTours) * tour + (D >= 3 ? BLANC_MIN : 0);
+    let avail = 0, days = [];
+    for (let k = 0; k <= D - 2; k++) {
+      const d = addDays(t, k), B = budgetJour(d); if (!B) continue;
+      days.push(d);
+      avail += Math.max(0, B * 0.6 - (calMin.get(d) || 0) - (k === 0 ? spentToday() : 0));
+    }
+    if (!days.length || need <= avail + 5) continue;
+    // Supplément par jour pour combler le manque, sans dépasser 4 h par jour.
+    let extra = Math.ceil((need - avail) / days.length / 0.6 / 5) * 5;
+    const maxExtra = Math.max(0, Math.min(...days.map(d => 240 - budgetJour(d))));
+    const partiel = extra > maxExtra;
+    extra = Math.min(extra, maxExtra);
+    out.push({ e, D, need: Math.round(need), avail: Math.round(avail), days, extra, partiel });
+  }
+  return out;
+}
+function applyExamBoost(a) {
+  const ex = Object.assign({}, (reglages && reglages.exceptions) || {});
+  for (const d of a.days) ex[d] = Math.min(600, budgetJour(d) + a.extra);
+  saveReglages({ exceptions: ex }, "+" + a.extra + " min par jour jusqu'à « " + a.e.intitule + " »");
+}
+function alertNodes() {
+  return examAlerts().map(a => el("div", { class: "notice", style: "display:grid;gap:8px" },
+    el("div", {}, el("b", {}, "Pas assez de temps pour « " + a.e.intitule + " » (" + a.e.matiere + ", J-" + a.D + ") : "), "sa préparation demande ≈ " + fmtMin(a.need) + ", ton temps en laisse ≈ " + fmtMin(a.avail) + " d'ici là. Les tours sont réduits en attendant."),
+    a.partiel ? el("div", {}, "Même en montant à 4 h par jour, il manquera du temps : commence par les chapitres en tête de la préparation (les plus fragiles) et fais au moins un examen blanc.") : null,
+    a.extra > 0 ? el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { type: "button", class: "primary", onclick: () => applyExamBoost(a) }, "Ajouter " + a.extra + " min par jour jusqu'au " + pretty(addDays(a.e.date, -1)))) : null));
+}
+
+/* ---- Réglages : enregistrement commun ---- */
+function saveReglages(patch, msg) {
+  reglages = Object.assign({}, reglages, patch);
+  if (reglages.exceptions) { const t = today(), ex = {}; for (const [d, v] of Object.entries(reglages.exceptions)) if (d >= addDays(t, -1) && v !== null && v !== undefined && v !== "") ex[d] = Number(v); reglages.exceptions = ex; }
   renderAll();
   clearTimeout(budgetSaveT);
-  budgetSaveT = setTimeout(() => write(() => db.doc("plan/reglages").set({ minutesJour: m, majLe: today() }), "Temps de révision : " + fmtMin(m) + " par jour"), 500);
+  budgetSaveT = setTimeout(() => write(() => db.doc("plan/reglages").set(Object.assign(clone(reglages), { majLe: today() })), msg), 500);
+}
+
+/* ---- Parcours guidé « Commencer ma journée » ---- */
+let guide = null;
+try { const g = JSON.parse(localStorage.getItem("rev-guide") || "null"); if (g && g.date === iso(new Date())) guide = g; } catch (e) {}
+const saveGuide = () => { try { localStorage.setItem("rev-guide", JSON.stringify(guide)); } catch (e) {} };
+function buildGuideSteps() {
+  const p = dayProgram(), t = today(), steps = [], items = dueItems();
+  for (const it of items) if (it.kind === "exam") steps.push({ id: "ex|" + it.doc.id + "|" + it.i, kind: "exam", label: it.s.code + " · " + it.doc.intitule });
+  if (p.nRev + p.nNew > 0) steps.push({ id: "cartes", kind: "cartes", label: "Flashcards du jour (" + (p.nRev + p.nNew) + ")" });
+  for (const it of items) if (it.kind === "chap" && p.cal.fit.has(it.doc.id + "|" + it.i)) steps.push({ id: "cal|" + it.doc.id + "|" + it.i, kind: "memo", label: ((STAGES.find(x => x.code === it.s.code) || {}).label || it.s.code) + " · " + it.doc.titre });
+  for (const x of computePlan().get(t) || []) {
+    if (x.kind === "chap" && p.prep.merged.get(x.chapId) === x) continue;
+    if (p.prep.fit.has(x.key) || p.prep.court.has(x.key)) steps.push({ id: "plan|" + x.key, kind: x.kind === "blanc" ? "blanc" : "prep", label: x.kind === "blanc" ? "Examen blanc · " + x.exam.matiere : "Tour " + x.tour + "/" + x.tours + " · " + x.chap.titre });
+  }
+  if (p.exo) steps.push({ id: "exo", kind: "exo", label: "Exercice libre" });
+  return steps;
+}
+function guideStepDone(st) {
+  const t = today();
+  if (guide.faits && guide.faits.includes(st.id)) return true;
+  if (st.kind === "exam") { const [, eid, i] = st.id.split("|"); const e = examens.find(x => x.id === eid); return !e || !!((e.etapes || [])[Number(i)] || {}).fait; }
+  if (st.kind === "memo") { const [, cid, i] = st.id.split("|"); return !dueItems().some(it => it.kind === "chap" && it.doc.id === cid && it.i === Number(i)); }
+  if (st.kind === "prep" || st.kind === "blanc") return ((planJour && planJour.done) || []).includes(st.id.slice(5));
+  if (st.kind === "cartes") return buildQueue(false).length === 0;
+  if (st.kind === "exo") return exercices.some(x => x.corrigeLe === t && x.debutLe && x.debutLe >= guide.debut);
+  return false;
+}
+function startGuide() {
+  guide = { date: today(), debut: new Date().toISOString(), steps: buildGuideSteps(), faits: [], passes: [] };
+  if (!guide.steps.length) { guide = null; toast("Rien à faire aujourd'hui dans ton temps."); return; }
+  saveGuide();
+  if (!pomo) startPomo(25, 5);
+  renderGuide(); $("guideBox").scrollIntoView({ block: "start" });
+}
+function guideNext(id, how) { if (how === "passe") guide.passes.push(id); else guide.faits.push(id); saveGuide(); renderGuide(); }
+function renderGuide() {
+  const box = $("guideBox"); if (!box || !(loaded.c && loaded.e && loaded.k)) return;
+  if (guide && guide.date !== today()) { guide = null; saveGuide(); }
+  if (!guide) {
+    const p = dayProgram(), n = buildGuideSteps().length;
+    box.replaceChildren(el("div", { class: "row" },
+      el("span", { class: "hint" }, jourOff() ? "Jour off : rien n'est prévu aujourd'hui." : n ? n + " étape" + (n > 1 ? "s" : "") + " dans ton temps (≈ " + fmtMin(p.total) + "), dans le bon ordre, avec le chrono 25/5." : "Rien d'autre à faire aujourd'hui dans ton temps."),
+      el("button", { class: "primary", type: "button", disabled: !n || null, onclick: startGuide }, "Commencer ma journée")));
+    return;
+  }
+  const states = guide.steps.map(st => ({ st, done: guideStepDone(st), passe: guide.passes.includes(st.id) }));
+  const cur = states.find(x => !x.done && !x.passe);
+  const nDone = states.filter(x => x.done).length;
+  const list = el("ol", { class: "steps" }, states.map(x => el("li", {}, el("span", { class: "chip " + (x.done ? "ok" : x === cur ? "exam" : "muted") }, x.done ? "✓" : x.passe ? "passée" : x === cur ? "en cours" : "à venir"), el("div", { class: "c" }, x.st.label))));
+  let body = null;
+  if (!cur) {
+    if (!guide.fini) { guide.fini = true; saveGuide(); celebrate("Journée terminée", nDone + " étape" + (nDone > 1 ? "s" : "") + " faites. Bravo !"); }
+    body = el("div", { class: "info" }, "Programme du jour terminé" + (states.some(x => x.passe) ? " (les étapes passées restent dans tes listes)." : ".") + " Tu peux t'arrêter là : la régularité compte plus que la quantité.");
+  } else {
+    const st = cur.st, p = dayProgram();
+    if (st.kind === "cartes") body = el("div", { class: "panel" }, el("div", { class: "t" }, st.label), el("div", { class: "m" }, "≈ " + cardsEta(buildQueue(false)) + ". Reviens ici à la fin de la séance."), el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { class: "primary", type: "button", onclick: () => { showTab("cartes"); startSession(); } }, "Ouvrir ma séance")));
+    else if (st.kind === "memo") { const [, cid, i] = st.id.split("|"); const it = dueItems().find(x => x.kind === "chap" && x.doc.id === cid && x.i === Number(i)); body = it ? calItemLine(it, p) : null; }
+    else if (st.kind === "exam") { const [, eid, i] = st.id.split("|"); const it = dueItems().find(x => x.kind === "exam" && x.doc.id === eid && x.i === Number(i)); body = it ? calItemLine(it, p) : null; }
+    else if (st.kind === "prep" || st.kind === "blanc") { const task = (computePlan().get(today()) || []).find(x => x.key === st.id.slice(5)); body = task ? planTaskLine(task, true, p.prep.court.has(task.key)) : null; }
+    else if (st.kind === "exo") { const c = suggestedChapter(); body = el("div", { class: "panel" }, el("div", { class: "t" }, "Exercice libre" + (c ? " · " + c.titre : "")), el("div", { class: "m" }, "≈ " + fmtMin(exoMin()) + " sur papier, puis correction."), el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { class: "primary", type: "button", disabled: !c || null, onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = "auto"; curExo = null; generateExercise(); } }, "Lancer l'exercice"))); }
+  }
+  box.replaceChildren(el("div", { class: "panel pomo-on" },
+    el("div", { class: "row" }, el("div", { class: "t" }, "Ma journée · étape " + Math.min(states.length, nDone + 1) + " / " + states.length), el("div", { class: "progress", style: "flex:1;min-width:120px" }, el("i", { style: "width:" + Math.round(100 * nDone / Math.max(1, states.length)) + "%" }))),
+    body,
+    cur ? el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { type: "button", class: "done", onclick: () => guideNext(cur.st.id, "fait") }, "Étape terminée"), el("button", { type: "button", onclick: () => guideNext(cur.st.id, "passe") }, "Passer")) : null,
+    el("details", {}, el("summary", {}, "Toutes les étapes"), list),
+    el("div", { class: "row" }, el("span", { class: "hint" }, "Les étapes se cochent aussi toutes seules quand tu fais le travail."), el("button", { class: "link", type: "button", onclick: () => { guide = null; saveGuide(); renderGuide(); } }, "Arrêter le parcours"))));
+}
+
+function loadBudget() { return jourOff() ? 0 : Math.max(20, Math.round(budgetJour() * 0.6 * 60 / cardSeconds())); }
+function setBudget(m) {
+  m = Math.max(15, Math.min(600, Math.round((Number(m) || 90) / 5) * 5));
+  saveReglages({ minutesJour: m }, "Temps de révision : " + fmtMin(m) + " par jour");
+}
+function setJourSemaine(wd, v) {
+  const sem = Array.isArray(reglages.semaine) ? reglages.semaine.slice() : [null, null, null, null, null, null, null];
+  while (sem.length < 7) sem.push(null);
+  sem[wd] = v === "" || v === null || v === undefined ? null : Math.max(0, Math.min(600, Math.round(Number(v) / 5) * 5));
+  saveReglages({ semaine: sem }, JOURS_LONG[wd] + (sem[wd] === null ? " : temps général" : sem[wd] === 0 ? " : jour off" : " : " + fmtMin(sem[wd])));
+}
+function setException(d, v) {
+  if (!d) return;
+  const ex = Object.assign({}, (reglages && reglages.exceptions) || {});
+  if (v === null) delete ex[d]; else ex[d] = Math.max(0, Math.min(600, Number(v) || 0));
+  saveReglages({ exceptions: ex }, v === null ? "Exception retirée" : Number(v) === 0 ? pretty(d) + " : jour off" : pretty(d) + " : " + fmtMin(v));
+}
+function budgetDaysPanel() {
+  const sem = Array.isArray(reglages.semaine) ? reglages.semaine : [];
+  const ex = (reglages && reglages.exceptions) || {}, t = today();
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const rows = order.map(wd => {
+    const v = sem[wd];
+    const inp = el("input", { type: "number", min: "0", max: "600", step: "5", placeholder: String(reglages.minutesJour || 90), value: v === null || v === undefined ? "" : String(v), "aria-label": JOURS_LONG[wd] + " (minutes)" });
+    inp.addEventListener("change", () => setJourSemaine(wd, inp.value));
+    return el("label", { class: "dayrow" }, el("span", {}, JOURS_LONG[wd]), inp, el("button", { type: "button", class: v === 0 ? "primary" : "", onclick: () => setJourSemaine(wd, v === 0 ? null : 0) }, v === 0 ? "off ✓" : "off"));
+  });
+  const dIn = el("input", { type: "date", min: t, value: addDays(t, 1), "aria-label": "Date" });
+  const mIn = el("input", { type: "number", min: "0", max: "600", step: "5", placeholder: "0 = off", "aria-label": "Minutes ce jour-là" });
+  const exList = Object.entries(ex).filter(([d]) => d >= t).sort();
+  return el("details", { class: "more" }, el("summary", {}, "Selon les jours et jours off" + (exList.length || sem.some(x => x !== null && x !== undefined) ? " (personnalisé)" : "")),
+    el("div", { style: "display:grid;gap:10px;margin-top:8px" },
+      el("div", { class: "hint" }, "Laisse vide pour garder le temps général. 0 ou « off » = pas de révision ce jour-là : tout est décalé aux jours suivants."),
+      el("div", { class: "checks", style: "max-height:none" }, rows),
+      el("div", { class: "t" }, "Jour particulier (sortie, partiel, voyage…)"),
+      el("div", { class: "budget-row" }, dIn, mIn, el("button", { type: "button", onclick: () => setException(dIn.value, mIn.value === "" ? 0 : mIn.value) }, mIn.value === "" ? "Ajouter" : "Ajouter")),
+      exList.length ? el("div", { class: "list" }, exList.map(([d, v]) => el("div", { class: "row" }, el("span", {}, pretty(d) + " : " + (Number(v) === 0 ? "jour off" : fmtMin(v))), el("button", { class: "link", type: "button", onclick: () => setException(d, null) }, "Retirer")))) : null));
 }
 function renderBudget() {
   const box = $("budgetBox"); if (!box || !(loaded.c && loaded.e && loaded.k)) return;
   const p = dayProgram(), B = p.B;
-  const inp = el("input", { type: "number", id: "budgetIn", min: "15", max: "600", step: "5", value: String(B), "aria-label": "Minutes de révision par jour" });
+  const inp = el("input", { type: "number", id: "budgetIn", min: "15", max: "600", step: "5", value: String(Number(reglages.minutesJour) || 90), "aria-label": "Minutes de révision par jour (temps général)" });
   inp.addEventListener("change", () => setBudget(inp.value));
   const SEG = [["examen", "Examens du jour", "var(--exam)"], ["cartes", "Flashcards à revoir", "var(--amber)"], ["memo", "Mémorisation des cours", "#7fd1c7"], ["prepa", "Préparation des examens", "#b9a3f5"], ["nouvelles", "Nouvelles cartes", "#f59ac0"], ["exo", "Exercice libre", "#8fb8ff"]].filter(([k]) => p.parts[k] >= 0.5);
   const total = p.spent + p.total, scale = Math.max(B, total, 1);
@@ -1092,13 +1312,17 @@ function renderBudget() {
   if (nCal || p.deferred) msg.push("Ne tient pas dans ton temps : " + [nMemo ? plur(nMemo, "révision de cours", "révisions de cours") : "", nPrep ? plur(nPrep, "tâche de préparation d'examen", "tâches de préparation d'examen") : "", p.deferred ? plur(p.deferred, "flashcard à revoir", "flashcards à revoir") : ""].filter(Boolean).join(", ") + ". Tout reste visible (« si tu as encore du temps ») et repasse en priorité demain.");
   if (nCourt) msg.push(nCourt + " tour" + (nCourt > 1 ? "s" : "") + " de préparation en version courte (flashcards sans exercice).");
   if (!msg.length) msg.push(total < 0.5 ? "Rien de prévu aujourd'hui." : p.left >= 5 ? "Tout tient dans ton temps, avec " + fmtMin(p.left) + " de marge." : "Tout tient dans ton temps.");
-  $("budgetCount").textContent = fmtMin(total) + " / " + fmtMin(B);
-  box.replaceChildren(el("div", { class: "panel" },
-    el("div", { class: "budget-row" }, el("label", { class: "inline", for: "budgetIn" }, "Je veux réviser"), inp, el("span", { class: "m" }, "minutes par jour"),
-      el("span", { class: "budget-chips" }, [30, 45, 60, 90, 120, 180].map(m => el("button", { type: "button", class: m === B ? "primary" : "", onclick: () => setBudget(m) }, fmtMin(m))))),
+  $("budgetCount").textContent = B ? fmtMin(total) + " / " + fmtMin(B) : "jour off";
+  if (!B) msg.unshift("Jour off : pas de révision prévue aujourd'hui" + (p.parts.examen ? " (sauf la révision d'examen du jour)" : "") + ". Ce qui était prévu est réparti sur les jours suivants.");
+  const cal = calibInfo();
+  box.replaceChildren(...alertNodes(), el("div", { class: "panel" },
+    el("div", { class: "budget-row" }, el("label", { class: "inline", for: "budgetIn" }, "Je veux réviser"), inp, el("span", { class: "m" }, "minutes par jour" + (B !== Number(reglages.minutesJour || 90) ? " (aujourd'hui : " + (B ? fmtMin(B) : "off") + ")" : "")),
+      el("span", { class: "budget-chips" }, [30, 45, 60, 90, 120, 180].map(m => el("button", { type: "button", class: m === Number(reglages.minutesJour || 90) ? "primary" : "", onclick: () => setBudget(m) }, fmtMin(m))))),
     wrap, legend,
     el("div", { class: p.deferred || nCal ? "info" : "m" }, msg.join(" ")),
-    el("div", { class: "hint" }, "Durées calculées avec ton rythme réel : " + Math.round(cardSeconds()) + " s par carte en moyenne et " + Math.round(failRate() * 100) + " % de cartes ratées qui reviennent dans la séance. Nouvelles cartes : " + p.nNew + " aujourd'hui (au plus " + p.durable + " par jour pour que les révisions des semaines suivantes tiennent dans ton temps). Tout se recalcule dès que tu changes ton temps.")));
+    budgetDaysPanel(),
+    el("div", { class: "hint" }, "Durées calculées avec ton rythme réel : " + Math.round(cardSeconds()) + " s par carte, " + Math.round(failRate() * 100) + " % de cartes ratées qui reviennent, exercice ≈ " + fmtMin(exoMin()) + (cal.n >= 3 ? ", révisions de cours ×" + cal.f.toFixed(2).replace(".", ",") + " d'après ton chrono 25/5" : " (les révisions de cours s'ajusteront dès 3 jours de chrono 25/5)") + ". Nouvelles cartes : " + p.nNew + " aujourd'hui (au plus " + p.durable + " par jour pour que les révisions des semaines suivantes tiennent dans ton temps). Tout se recalcule dès que tu changes ton temps.")));
+  renderGuide();
 }
 
 /* ================= Calendrier (Aujourd'hui) ================= */
@@ -1110,24 +1334,24 @@ function dueItems() {
 }
 
 const NO_PROG = { prep: { merged: new Map(), court: new Set(), extra: new Set(), fit: new Set() }, cal: { min: {}, extra: new Set(), fit: new Set() } };
-function calItemLine(it, p) {
+function calItemLine(it, p, reprog) {
   if (it.kind === "exam") {
     const isJ = it.s.code === "Jour J";
     return el("div", { class: "item examen" },
       el("span", { class: "chip exam" }, it.s.code),
-      el("div", { class: "what" }, el("div", { class: "t" }, it.doc.intitule), el("div", { class: "m" }, it.doc.matiere + " · examen le " + pretty(it.doc.date) + " · ≈ " + fmtMin(EXAM_STEP_MIN[it.s.code] || 15))),
+      el("div", { class: "what" }, el("div", { class: "t" }, it.doc.intitule), el("div", { class: "m" }, it.doc.matiere + " · examen le " + pretty(it.doc.date) + " · ≈ " + fmtMin(examStepMin(it.s.code)))),
       el("div", { class: "actions" }, el("button", { class: "done", type: "button", onclick: () => markExamDone(it.doc, it.i) }, "Fait")),
       el("div", { class: "how" }, isJ ? "Dernier tour : flashcards du programme et points clés, pas de nouvelle notion." : "La veille : flashcards du programme + un exercice type examen, puis dors bien (le sommeil consolide)."));
   }
   const st = STAGES.find(x => x.code === it.s.code) || STAGES[0], k = it.doc.id + "|" + it.i;
   const tour = p.prep.merged.get(it.doc.id) || null, court = tour && p.prep.court.has(tour.key);
-  const mins = (p.cal.min[k] || STAGE_MIN[it.s.code] || 10) + (tour && !court ? EXO_MIN : 0);
+  const mins = (p.cal.min[k] || stageMin(it.s.code)) + (tour && !court ? exoMin() : 0);
   const c = it.doc;
   return el("div", { class: "item" + (it.late ? " late" : ""), style: it.late ? null : mcStyle(c.matiere) },
     el("span", { class: "chip" + (it.late ? " late" : "") }, st.label),
     el("div", { class: "what" },
       el("div", { class: "t" }, c.titre, tour ? [" ", el("span", { class: "chip exam", title: "Tour de préparation de l'examen, réuni avec la révision du calendrier" }, "+ tour " + tour.tour + "/" + tour.tours)] : null),
-      el("div", { class: "m" }, c.matiere + (it.late ? " · prévu " + pretty(it.s.due) : "") + (it.s.ratees ? " · pas su " + it.s.ratees + "×" : "") + " · ≈ " + fmtMin(mins))),
+      el("div", { class: "m" }, c.matiere + (it.late ? " · prévu " + pretty(it.s.due) : "") + (it.s.ratees ? " · pas su " + it.s.ratees + "×" : "") + " · ≈ " + fmtMin(mins) + (reprog ? " · replanifiée au " + pretty(reprog) : reprog === null ? " · à replanifier" : ""))),
     el("div", { class: "actions" },
       tour ? el("button", { type: "button", onclick: () => { showTab("cartes"); startSession({ chapIds: [c.id], label: c.titre }); } }, "Cartes") : null,
       tour && !court ? el("button", { type: "button", onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = String(tourLevel(tour)); curExo = null; generateExercise(); } }, "Exercice") : null,
@@ -1151,7 +1375,7 @@ function renderToday() {
   const fit = [], extra = [];
   for (const it of items) (it.kind === "chap" && p.cal.extra.has(it.doc.id + "|" + it.i) ? extra : fit).push(it);
   fit.forEach(it => box.append(calItemLine(it, p)));
-  if (extra.length) box.append(el("details", { class: "more" }, el("summary", {}, "Si tu as encore du temps (" + extra.length + ") : sinon elles passent en priorité demain"), el("div", { class: "list", style: "margin-top:8px" }, extra.map(it => calItemLine(it, p)))));
+  if (extra.length) { const sch = loaded.k ? calSchedule(p) : new Map(); box.append(el("details", { class: "more" }, el("summary", {}, (jourOff() ? "Jour off : " : "Si tu as encore du temps ") + "(" + extra.length + ") — sinon, réparties automatiquement sur les jours suivants"), el("div", { class: "list", style: "margin-top:8px" }, extra.map(it => calItemLine(it, p, it.kind === "chap" ? (sch.get(it.doc.id + "|" + it.i) || null) : undefined))))); }
 }
 
 function renderStats() {
@@ -1227,10 +1451,15 @@ function renderUpcoming() {
   if (!(loaded.c && loaded.e)) return;
   const t = today(), end = addDays(t, 14), byDay = new Map();
   const push = (d, node) => { if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(node); };
-  for (const c of chapitres) for (const s of c.etapes || []) if (!s.fait && s.due > t && s.due <= end) {
+  const sch = loaded.k ? calSchedule() : new Map();
+  for (const c of chapitres) (c.etapes || []).forEach((s, i) => {
+    if (s.fait || !s.due) return;
+    const d = sch.has(c.id + "|" + i) ? sch.get(c.id + "|" + i) : s.due;
+    if (!d || d <= t || d > end) return;
     const st = STAGES.find(x => x.code === s.code);
-    push(s.due, el("span", {}, el("span", { class: "chip" }, st ? st.label : s.code), " " + c.titre));
-  }
+    push(d, el("span", { title: d !== s.due ? "Prévue le " + pretty(s.due) + ", décalée pour tenir dans ton temps" : "" }, el("span", { class: "chip" + (d !== s.due ? " muted" : "") }, st ? st.label : s.code), " " + c.titre + (d !== s.due ? " (décalée)" : "")));
+  });
+  for (let k = 1; k <= 14; k++) { const d = addDays(t, k); if (jourOff(d)) push(d, el("span", { class: "chip muted" }, "jour off")); }
   for (const e of examens) if (e.date > t && e.date <= end) push(e.date, el("span", {}, el("span", { class: "chip exam" }, "Examen"), " " + e.intitule));
   box.replaceChildren();
   const days = [...byDay.keys()].sort();
@@ -1418,6 +1647,7 @@ function renderSession() {
       el("h3", {}, "Séance terminée"),
       el("p", {}, s.total ? (s.ok + " réussies, " + s.ko + " ratées. Les ratées reviendront plus tôt ; demain, de nouvelles cartes t'attendent.") : "Rien à revoir."),
       el("div", { class: "row" }, (() => { const extra = buildQueue(false, { sansLimite: true }).length; return extra ? el("button", { type: "button", onclick: () => startSession({ sansLimite: true }) }, "Continuer au-delà de mon temps (" + extra + ")") : el("span", {}); })(),
+        guide ? el("button", { class: "primary", type: "button", onclick: () => { session = null; renderSession(); showTab("jour"); renderGuide(); } }, "Retour à ma journée") : null,
         el("button", { type: "button", onclick: () => { session = null; renderSession(); } }, "Fermer"))));
     return;
   }
@@ -1586,7 +1816,7 @@ async function generateExercise() {
     const r = await sample.json(exoPrompt(chap, niveau, texte, other), { cache: false, modelTier: "complex" });
     if (!r || !r.enonce || !r.solution) throw { code: "invalid_json" };
     const id = today() + "-" + rid();
-    const doc = { chapId: chap.id, autreChapId: other ? other.id : null, niveau, titre: String(r.titre || "Exercice"), enonce: String(r.enonce), indice: String(r.indice || ""), methode: String(r.methode || ""), solution: String(r.solution), bareme: Array.isArray(r.bareme) ? r.bareme : [], creeLe: today(), statut: "a_faire" };
+    const doc = { chapId: chap.id, autreChapId: other ? other.id : null, niveau, titre: String(r.titre || "Exercice"), enonce: String(r.enonce), indice: String(r.indice || ""), methode: String(r.methode || ""), solution: String(r.solution), bareme: Array.isArray(r.bareme) ? r.bareme : [], creeLe: today(), debutLe: new Date().toISOString(), statut: "a_faire" };
     await write(() => db.doc("exercices/" + id).set(doc));
     curExo = Object.assign({ id }, doc);
     renderCurrentExo();
@@ -1683,7 +1913,8 @@ async function correctExercise() {
 async function finishSelf(note) { const x = curExo; await applyResult(x, chapById(x.chapId), note, { verdict: "Auto-correction.", etapes: [], pointsFaibles: [] }); }
 async function applyResult(x, chap, note, r) {
   const correction = { verdict: String(r.verdict || ""), etapes: Array.isArray(r.etapes) ? r.etapes.slice(0, 20) : [], conseil: String(r.conseil || ""), cartes: Array.isArray(r.cartes) ? r.cartes.slice(0, 4) : [] };
-  await write(() => db.doc("exercices/" + x.id).update({ statut: "corrige", note, correction, corrigeLe: today() }));
+  const dureeMin = x.debutLe ? Math.round((Date.now() - new Date(x.debutLe).getTime()) / 60000) : null;
+  await write(() => db.doc("exercices/" + x.id).update(Object.assign({ statut: "corrige", note, correction, corrigeLe: today() }, dureeMin && dureeMin >= 3 && dureeMin <= 120 ? { dureeMin } : {})));
   if (chap) {
     let niv = chap.niveau || 1; const oldNiv = niv;
     if (note >= 8 && x.niveau >= niv) niv = Math.min(5, niv + 1);
@@ -2158,18 +2389,21 @@ function computePlan() {
   const t = today(), days = new Map();
   // Nombre de tours par jour selon le temps de révision : 60 % du temps (le reste va aux flashcards du jour),
   // moins les révisions du calendrier déjà prévues ce jour-là ; entre 1 et 4 tours.
-  const B = budgetJour(), calMin = new Map();
-  for (const c of chapitres) for (const x of c.etapes || []) if (!x.fait && x.due) { const d = x.due < t ? t : x.due; calMin.set(d, (calMin.get(d) || 0) + (STAGE_MIN[x.code] || 10)); }
-  const capFor = d => Math.max(1, Math.min(4, Math.floor((B * 0.6 - (calMin.get(d) || 0)) / (TOUR_CARTES + EXO_MIN))));
+  const calMin = calMinMap();
+  const capFor = d => { const B = budgetJour(d); return B <= 0 ? 0 : Math.max(1, Math.min(4, Math.floor((B * 0.6 - (calMin.get(d) || 0)) / (TOUR_CARTES + exoMin())))); };
   const add = (d, task) => { if (!days.has(d)) days.set(d, []); days.get(d).push(task); };
   const load = d => (days.get(d) || []).filter(x => x.kind === "chap").length;
   const place = (task, idx, lo, hi) => {
     for (let off = 0; off <= hi - lo; off++) for (const cand of [idx - off, idx + off]) {
       if (cand < lo || cand > hi) continue;
       const d = addDays(t, cand);
-      if (task.kind === "chap" ? load(d) < capFor(d) : !(days.get(d) || []).some(x => x.kind === "blanc")) { add(d, Object.assign({ date: d }, task)); return; }
+      if (task.kind === "chap" ? load(d) < capFor(d) : capFor(d) > 0 && !(days.get(d) || []).some(x => x.kind === "blanc")) { add(d, Object.assign({ date: d }, task)); return; }
     }
-    add(addDays(t, Math.max(lo, Math.min(hi, idx))), Object.assign({ date: addDays(t, Math.max(lo, Math.min(hi, idx))) }, task));
+    // Tout est plein : le jour non « off » le moins chargé de la fenêtre (sinon le jour visé).
+    let best = null;
+    for (let k = lo; k <= hi; k++) { const d = addDays(t, k); if (capFor(d) <= 0) continue; const over = load(d) - capFor(d); if (best === null || over < best.over) best = { d, over }; }
+    const d = best ? best.d : addDays(t, Math.max(lo, Math.min(hi, idx)));
+    add(d, Object.assign({ date: d }, task));
   };
   for (const e of upcomingExams()) {
     const D = diff(e.date, t), last = D - 2;
@@ -2212,7 +2446,7 @@ function planTaskLine(task, withActions, court) {
   const c = task.chap, niv = c.niveau || 1, lvl = dte <= 7 ? Math.max(niv, 4) : Math.max(niv, 3);
   return el("div", { class: "item" + (done ? " done" : ""), style: mcStyle(c.matiere) },
     el("span", { class: "chip" }, "Tour " + task.tour + "/" + task.tours),
-    el("div", { class: "what" }, el("div", { class: "t" }, c.titre), el("div", { class: "m" }, c.matiere + " · pour " + ex.intitule + " (J-" + dte + ") · " + (court ? "flashcards du chapitre (version courte : pas le temps pour l'exercice aujourd'hui) · ≈ " + fmtMin(TOUR_CARTES) : "flashcards du chapitre + exercice niveau " + Math.min(5, lvl) + " · ≈ " + fmtMin(TOUR_CARTES + EXO_MIN)))),
+    el("div", { class: "what" }, el("div", { class: "t" }, c.titre), el("div", { class: "m" }, c.matiere + " · pour " + ex.intitule + " (J-" + dte + ") · " + (court ? "flashcards du chapitre (version courte : pas le temps pour l'exercice aujourd'hui) · ≈ " + fmtMin(TOUR_CARTES) : "flashcards du chapitre + exercice niveau " + Math.min(5, lvl) + " · ≈ " + fmtMin(TOUR_CARTES + exoMin())))),
     withActions ? el("div", { class: "actions" },
       el("button", { type: "button", onclick: () => { showTab("cartes"); startSession({ chapIds: [c.id], label: c.titre }); } }, "Cartes"),
       el("button", { type: "button", onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = String(Math.min(5, lvl)); curExo = null; generateExercise(); } }, "Exercice"),
@@ -2233,6 +2467,7 @@ function renderPlan() {
   box.replaceChildren();
   const prog = dayProgram(), mergedTasks = todayTasks.filter(x => x.kind === "chap" && prog.prep.merged.get(x.chapId) === x);
   const shown = todayTasks.filter(x => !mergedTasks.includes(x));
+  alertNodes().forEach(n => box.append(n));
   if (!upcomingExams().length) box.append(el("div", { class: "empty" }, "Rien à préparer : ajoute tes dates de partiels (onglet Examens) et un planning jour par jour se construira tout seul."));
   else if (!todayTasks.length) box.append(el("div", { class: "empty" }, "Aucun tour de préparation aujourd'hui : les flashcards suffisent."));
   else {
@@ -2489,7 +2724,7 @@ function setupExtras() {
 function subscribeExtras() {
   db.collection("blancs").onSnapshot(s => { blancs = s.docs.map(d => Object.assign({ id: d.id }, d.data())); renderBlancs(); }, () => {});
   db.doc("plan/" + today()).onSnapshot(s => { planJour = s.exists ? s.data() : null; renderPlan(); renderToday(); renderBudget(); renderSuggest(); }, () => {});
-  db.doc("plan/reglages").onSnapshot(s => { if (s.exists) { const m = Number((s.data() || {}).minutesJour); if (m && m !== reglages.minutesJour) { reglages = Object.assign({}, reglages, s.data()); renderAll(); } } }, () => {});
+  db.doc("plan/reglages").onSnapshot(s => { if (s.exists) { const d = s.data() || {}, cur = JSON.stringify({ m: reglages.minutesJour, s: reglages.semaine || null, e: reglages.exceptions || {} }); if (JSON.stringify({ m: d.minutesJour, s: d.semaine || null, e: d.exceptions || {} }) !== cur) { reglages = Object.assign({ minutesJour: 90 }, d); renderAll(); } } }, () => {});
   db.collection("plan").onSnapshot(s => { planHist = {}; for (const d of s.docs) if (/^\d{4}-\d{2}-\d{2}$/.test(d.id)) planHist[d.id] = (d.data() || {}).done || []; renderPlan(); snapshotPlan(); }, () => {});
 }
 
@@ -2797,11 +3032,14 @@ function snapshotPlan() {
       const d = addDays(t, i), tasks = plan.get(d) || [];
       if (tasks.length) jours[d] = tasks.map(x => x.kind === "blanc" ? { type: "examen blanc", matiere: x.exam.matiere, examen: x.exam.intitule, cle: x.key } : { type: "chapitre", matiere: x.chap.matiere, titre: x.chap.titre, tour: x.tour + "/" + x.tours, examen: x.exam.intitule, cle: x.key });
     }
-    const json = JSON.stringify(jours);
+    const sch = calSchedule(), memo = {}, temps = {};
+    for (const c of chapitres) (c.etapes || []).forEach((x, i) => { const d = sch.get(c.id + "|" + i); if (d && d <= addDays(t, 6)) (memo[d] = memo[d] || []).push({ matiere: c.matiere, titre: c.titre, etape: x.code, prevue: x.due }); });
+    for (let i = 0; i < 7; i++) { const d = addDays(t, i); temps[d] = budgetJour(d); }
+    const json = JSON.stringify({ jours, memo, temps });
     if (json === lastPlanSnap) return;
-    if (lastPlanSnap === null) { try { const s = await db.doc("plan/apercu").get(); if (s.exists && JSON.stringify(s.data().jours || {}) === json && s.data().majLe === t) { lastPlanSnap = json; return; } } catch (e) {} }
+    if (lastPlanSnap === null) { try { const s = await db.doc("plan/apercu").get(); if (s.exists && JSON.stringify({ jours: s.data().jours || {}, memo: s.data().memo || {}, temps: s.data().temps || {} }) === json && s.data().majLe === t) { lastPlanSnap = json; return; } } catch (e) {} }
     lastPlanSnap = json;
-    await write(() => db.doc("plan/apercu").set({ majLe: t, jours }));
+    await write(() => db.doc("plan/apercu").set({ majLe: t, jours, memo, temps }));
   }, 2500);
 }
 
@@ -2840,7 +3078,16 @@ function weekFigures(endDate) {
     if (late || laps >= 3 || ((c.niveau || 1) <= 2 && dte !== null && dte <= 14)) danger.push(c.matiere + " · " + c.titre + " (" + [late ? late + " révision(s) en retard" : "", laps >= 3 ? laps + " cartes difficiles" : "", dte !== null && dte <= 14 ? "examen dans " + dte + " j, niveau " + (c.niveau || 1) : ""].filter(Boolean).join(", ") + ")");
   }
   const examsProches = upcomingExams().filter(e => diff(e.date, end) <= 21).map(e => e.matiere + " (" + e.intitule + ") le " + pretty(e.date));
-  return { debut: start, fin: end, joursActifs: actifs, minutes, revues, reussite: revues ? Math.round(100 * justes / revues) : null, nouvelles, etapes, retard,
+  // Temps estimé du travail fait (même calcul que le programme du jour) contre temps chronométré (25/5).
+  let tempsEstime = 0;
+  for (let k = 0; k < 7; k++) { const d = addDays(start, k), sd = st.find(x => x.id === d) || {};
+    tempsEstime += ((sd.secondes || 0) + Math.max(0, (sd.revues || 0) - (sd.chrono || 0)) * cardSeconds()) / 60;
+    for (const c of chapitres) for (const x of c.etapes || []) if (x.fait === d) tempsEstime += stageMin(x.code);
+    for (const e of examens) for (const x of e.etapes || []) if (x.fait === d) tempsEstime += examStepMin(x.code);
+    tempsEstime += exercices.filter(x => x.corrigeLe === d).reduce((a, x) => a + (x.dureeMin || exoMin()), 0) + ateliers.filter(a => a.creeLe === d).length * ATELIER_MIN; }
+  const cal = calibInfo();
+  return { tempsEstime: Math.round(tempsEstime), tempsVise: [...Array(7)].reduce((a, _, k) => a + budgetJour(addDays(start, k)), 0), calibration: { revisions: Math.round(cal.f * 100) / 100, exercice: exoMin(), secondesParCarte: Math.round(cardSeconds()) },
+    debut: start, fin: end, joursActifs: actifs, minutes, revues, reussite: revues ? Math.round(100 * justes / revues) : null, nouvelles, etapes, retard,
     exercices: exos.length, noteExos: avg(exos, x => x.note), blancs: bl.map(b => b.matiere + " " + b.note + "/20"), ateliers: at.length, scoreAteliers: avg(at, a => a.score),
     progres: progres.slice(0, 6), danger: danger.slice(0, 6), examsProches };
 }
@@ -2873,6 +3120,7 @@ function renderBilan() {
   box.replaceChildren(el("div", { class: "panel" },
     el("div", { class: "row" }, el("div", { class: "t" }, "Semaine du " + pretty(f.debut) + " au " + pretty(f.fin)), old ? el("span", { class: "chip muted" }, "ancien bilan") : null),
     el("div", { class: "stats bilan-tiles" }, tile(f.joursActifs, "jours actifs / 7"), tile(f.minutes ? Math.round(f.minutes / 6) / 10 + " h" : "0 h", "de travail chrono"), tile(f.revues, "cartes revues"), tile(f.reussite === null ? null : f.reussite + " %", "de réussite")),
+    f.tempsEstime !== undefined ? el("div", { class: "m" }, "Temps : " + fmtMin(f.tempsEstime) + " de travail estimé" + (f.minutes ? ", " + fmtMin(f.minutes) + " chronométrées" : "") + (f.tempsVise ? " pour " + fmtMin(f.tempsVise) + " visées" : "") + (f.calibration ? " · durées ajustées : " + f.calibration.secondesParCarte + " s par carte, exercice " + fmtMin(f.calibration.exercice) + ", révisions ×" + String(f.calibration.revisions).replace(".", ",") : "") + ".") : null,
     el("div", { class: "m" }, [f.etapes + " révision(s) du calendrier faites", f.retard ? f.retard + " en retard" : "", f.exercices ? f.exercices + " exercice(s), moyenne " + f.noteExos + "/10" : "", (f.blancs || []).length ? "examens blancs : " + f.blancs.join(", ") : "", f.ateliers ? f.ateliers + " atelier(s), score moyen " + f.scoreAteliers + " %" : ""].filter(Boolean).join(" · ")),
     b.resume ? el("p", {}, b.resume) : null,
     (b.conseils || []).length ? el("div", { class: "info" }, el("b", {}, "Pour la semaine prochaine"), el("ol", { style: "margin:6px 0 0;padding-left:18px" }, b.conseils.map(c => el("li", {}, c)))) : null,
