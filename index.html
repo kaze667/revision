@@ -310,6 +310,25 @@ details.panel > summary { font-size: 14.5px; }
 details.more > summary { padding: 4px 2px; }
 .dayrow { display: grid; grid-template-columns: 90px 110px auto; gap: 8px; align-items: center; color: var(--ink); font-weight: 500; justify-content: start; }
 .dayrow input { padding: 6px 10px; }
+/* Nouveautés 4 */
+.memo-bar { position: sticky; top: 62px; z-index: 4; }
+#memoBar[hidden] { display: none; }
+.memo-mat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.memo-mat button { margin-left: auto; padding: 5px 12px; font-size: 13px; }
+.rate button.sugg { outline: 2px solid var(--amber); outline-offset: 2px; }
+.audio-bar { gap: 8px; }
+.obj-list { display: grid; gap: 8px; }
+.obj-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 8px 10px; border-radius: 12px; background: var(--night-2); box-shadow: inset 3px 0 0 var(--mc); }
+.obj-row .name { font-weight: 700; }
+.obj-row input { width: 76px; padding: 5px 8px; }
+.obj-row .m { grid-column: 1 / -1; }
+.edt-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 220px); gap: 8px; align-items: center; padding: 8px 10px; border-radius: 12px; background: var(--night-2); }
+.edt-row.todo { box-shadow: inset 3px 0 0 var(--late); }
+.edt-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.edt-day { display: grid; gap: 2px; font-size: 12.5px; padding: 8px; border-radius: 10px; background: var(--night-2); border: 1px solid var(--line); min-width: 0; }
+.edt-day b { font-family: var(--f-mono); font-weight: 500; font-size: 11.5px; }
+.edt-day.busy { border-color: rgba(255,207,122,0.5); }
+@media (max-width: 560px) { .edt-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } .edt-row { grid-template-columns: 1fr; } .memo-bar { top: 56px; } }
 </style>
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
@@ -355,6 +374,7 @@ details.more > summary { padding: 4px 2px; }
     <button type="button" data-tab="examens">Examens</button>
     <button type="button" data-tab="reglages">Réglages<span class="badge" id="bSet" hidden>!</span></button>
   </nav>
+  <div class="panel memo-bar pomo-on" id="memoBar" hidden></div>
 
   <div id="dbNotice" class="notice" hidden></div>
 
@@ -424,6 +444,10 @@ details.more > summary { padding: 4px 2px; }
       <div id="sessBox"></div>
     </section>
     <section>
+      <h2>Cartes problématiques <span class="count" id="probCount"></span></h2>
+      <div class="list" id="probBox"></div>
+    </section>
+    <section>
       <h2>Générer des cartes</h2>
       <div class="panel">
         <div class="fields">
@@ -475,6 +499,10 @@ details.more > summary { padding: 4px 2px; }
         </div>
         <div class="formfoot"><span class="hint">« Mix automatique » choisit selon tes examens, tes points faibles et ce que tu n'as pas travaillé récemment.</span><button class="primary" type="button" id="exGen">Générer l'exercice</button></div>
       </div>
+    </section>
+    <section id="miniSec">
+      <h2>Mini-partiel de la semaine</h2>
+      <div id="miniBox"></div>
     </section>
     <section id="exCurSec" hidden>
       <h2>Exercice en cours</h2>
@@ -539,6 +567,10 @@ details.more > summary { padding: 4px 2px; }
       <datalist id="matieres"></datalist>
     </section>
     <section>
+      <h2>Emploi du temps</h2>
+      <div class="panel" id="edtBox"></div>
+    </section>
+    <section>
       <h2>Paquets partagés</h2>
       <div class="panel">
         <div class="hint">Un paquet = un chapitre avec ses notions, ses flashcards et le texte du cours, sans ta progression. Bouton « Partager » sur un chapitre pour en créer un ; ici pour importer celui d'un ami (ses cartes repartent de zéro chez toi).</div>
@@ -573,6 +605,12 @@ details.more > summary { padding: 4px 2px; }
     <section>
       <h2>Examens à venir <span class="count" id="examCount"></span></h2>
       <div class="list" id="examList"></div>
+    </section>
+    <section>
+      <h2>Objectifs et chances le jour J</h2>
+      <div class="hint">Ta note visée répartit ton temps entre les matières : plus l'écart avec ton niveau estimé est grand, plus la matière reçoit de flashcards, de tours de préparation et de questions du jour. Les pourcentages estiment ce que tu retiendras de chaque chapitre le jour de l'examen, d'après tes cartes (en supposant que tu fais les révisions prévues) ; les chapitres les plus faibles passent en premier dans la préparation.</div>
+      <div id="ficheOut"></div>
+      <div id="objBox" style="display:grid;gap:12px"></div>
     </section>
     <section id="blancSec">
       <h2>Examen blanc</h2>
@@ -964,7 +1002,7 @@ function interleaveQs(qs) {
   while (left.length) { const prev = out.length ? out[out.length - 1].matiere : null; let i = left.findIndex(q => q.matiere !== prev); if (i < 0) i = 0; out.push(left.splice(i, 1)[0]); }
   return out;
 }
-const cleanQs = arr => interleaveQs(arr.slice(0, 10).map(q => ({ matiere: String(q.matiere || ""), chapitre: String(q.chapitre || ""), type: Q_TYPES[q.type] ? q.type : "", q: String(q.q || ""), r: String(q.r || "") })));
+const cleanQs = arr => interleaveQs(arr.slice(0, 15).map(q => ({ matiere: String(q.matiere || ""), chapitre: String(q.chapitre || ""), type: Q_TYPES[q.type] ? q.type : "", q: String(q.q || ""), r: String(q.r || "") })));
 
 
 /* ================= Temps de révision : budget quotidien et programme du jour =================
@@ -986,7 +1024,7 @@ function budgetBrut(d) {
   const m = Number(v);
   return isFinite(m) ? m : 90;
 }
-function budgetJour(d) { const m = budgetBrut(d || today()); return m <= 0 ? 0 : Math.max(15, Math.min(600, m)); }
+function budgetJour(d) { d = d || today(); let m = budgetBrut(d); if (m > 0) { const f = edtFactor(d); if (f < 1) m = Math.round(m * f / 5) * 5; } return m <= 0 ? 0 : Math.max(15, Math.min(600, m)); }
 const jourOff = d => budgetJour(d || today()) === 0;
 const fmtMin = m => { m = Math.max(0, Math.round(m)); return m < 60 ? m + " min" : Math.floor(m / 60) + " h" + (m % 60 ? " " + pad(m % 60) : ""); };
 function recentStats() { const t = today(); return statsAll.filter(s => s.id >= addDays(t, -13) && s.id <= t); }
@@ -1015,7 +1053,7 @@ function spentToday() {
   let cal = 0;
   for (const c of chapitres) for (const x of c.etapes || []) if (x.fait === t) cal += stageMin(x.code);
   for (const e of examens) for (const x of e.etapes || []) if (x.fait === t) cal += examStepMin(x.code);
-  const exos = exercices.filter(x => x.corrigeLe === t).length * exoMin();
+  const exos = exercices.filter(x => x.corrigeLe === t).reduce((a, x) => a + (x.mixte ? MINI_MIN : exoMin()), 0) + (briefDone() ? briefCount() * Q_MIN : 0);
   const bl = blancs.filter(b => b.corrigeLe === t).reduce((a, b) => a + (b.dureeReelle || b.duree || 60), 0);
   const at = ateliers.filter(a => a.creeLe === t).length * ATELIER_MIN;
   return Math.max(cards + cal + exos + bl + at, st.minutes || 0);
@@ -1024,10 +1062,11 @@ const tourLevel = task => { const niv = (task.chap && task.chap.niveau) || 1, dt
 function dayProgram() {
   const t = today(), B = budgetJour(), spent = spentToday();
   let R = B - spent;
-  const parts = { examen: 0, cartes: 0, memo: 0, prepa: 0, nouvelles: 0, exo: 0 };
+  const parts = { examen: 0, questions: 0, cartes: 0, memo: 0, prepa: 0, nouvelles: 0, mini: 0, exo: 0 };
   const take = (k, m) => { parts[k] += m; R -= m; };
   const items = dueItems(), done = (planJour && planJour.done) || [];
   for (const it of items) if (it.kind === "exam") take("examen", examStepMin(it.s.code));
+  const nQ = briefDone() ? 0 : briefCount(); if (nQ) take("questions", nQ * Q_MIN);
   const planToday = (computePlan().get(t) || []).filter(x => !done.includes(x.key));
   const calChap = items.filter(it => it.kind === "chap");
   // Un tour de préparation sur un chapitre qui a aussi sa révision du calendrier aujourd'hui : une seule ligne.
@@ -1073,10 +1112,12 @@ function dayProgram() {
   for (const k of later) { const m = cal.min[k]; if (m <= R + 2) { cal.fit.add(k); take("memo", m); } else cal.extra.add(k); }
   // tours réunis avec une révision du calendrier traitée dans ce second passage
   for (const [x, ck] of mergedLater) { if (!cal.fit.has(ck)) prep.extra.add(x.key); else if (exoMin() <= R + 2) { prep.fit.add(x.key); take("prepa", exoMin()); } else prep.court.add(x.key); }
-  const exo = R >= exoMin() && !planToday.some(x => x.kind === "chap");
+  const mini = miniDue() && R >= MINI_MIN - 2;
+  if (mini) take("mini", MINI_MIN);
+  const exo = !mini && R >= exoMin() && !planToday.some(x => x.kind === "chap");
   if (exo) take("exo", exoMin());
   const total = Object.values(parts).reduce((a, b) => a + b, 0);
-  return { B, spent, parts, total, left: R, due: dueSorted, nRev, deferred: dueSorted.length - nRev, fresh, nNew, durable, cal, prep, exo };
+  return { B, spent, parts, total, left: R, due: dueSorted, nRev, deferred: dueSorted.length - nRev, fresh, nNew, durable, cal, prep, exo, mini, nQ };
 }
 
 /* ---- Temps prévu / temps réel : les durées s'ajustent sur ton rythme ----
@@ -1085,7 +1126,7 @@ function dayProgram() {
    le temps chronométré (hors flashcards et exercices, déjà mesurés) au temps estimé ; facteur entre 0,6 et 2. */
 let calibCache = { k: null, v: null };
 function exoMin() {
-  const xs = exercices.filter(x => x.dureeMin > 0).sort((a, b) => String(b.corrigeLe).localeCompare(String(a.corrigeLe))).slice(0, 10);
+  const xs = exercices.filter(x => x.dureeMin > 0 && !x.mixte).sort((a, b) => String(b.corrigeLe).localeCompare(String(a.corrigeLe))).slice(0, 10);
   if (!xs.length) return EXO_BASE;
   const avg = xs.reduce((a, x) => a + x.dureeMin, 0) / xs.length, w = Math.min(1, xs.length / 5);
   return Math.round(Math.max(8, Math.min(60, w * avg + (1 - w) * EXO_BASE)));
@@ -1195,11 +1236,13 @@ function buildGuideSteps() {
   const p = dayProgram(), t = today(), steps = [], items = dueItems();
   for (const it of items) if (it.kind === "exam") steps.push({ id: "ex|" + it.doc.id + "|" + it.i, kind: "exam", label: it.s.code + " · " + it.doc.intitule });
   if (p.nRev + p.nNew > 0) steps.push({ id: "cartes", kind: "cartes", label: "Flashcards du jour (" + (p.nRev + p.nNew) + ")" });
+  if (p.nQ) steps.push({ id: "questions", kind: "questions", label: "Questions du jour (" + p.nQ + ")" });
   for (const it of items) if (it.kind === "chap" && p.cal.fit.has(it.doc.id + "|" + it.i)) steps.push({ id: "cal|" + it.doc.id + "|" + it.i, kind: "memo", label: ((STAGES.find(x => x.code === it.s.code) || {}).label || it.s.code) + " · " + it.doc.titre });
   for (const x of computePlan().get(t) || []) {
     if (x.kind === "chap" && p.prep.merged.get(x.chapId) === x) continue;
     if (p.prep.fit.has(x.key) || p.prep.court.has(x.key)) steps.push({ id: "plan|" + x.key, kind: x.kind === "blanc" ? "blanc" : "prep", label: x.kind === "blanc" ? "Examen blanc · " + x.exam.matiere : "Tour " + x.tour + "/" + x.tours + " · " + x.chap.titre });
   }
+  if (p.mini) steps.push({ id: "mini", kind: "mini", label: "Mini-partiel mixte de la semaine (20 min)" });
   if (p.exo) steps.push({ id: "exo", kind: "exo", label: "Exercice libre" });
   return steps;
 }
@@ -1211,6 +1254,8 @@ function guideStepDone(st) {
   if (st.kind === "prep" || st.kind === "blanc") return ((planJour && planJour.done) || []).includes(st.id.slice(5));
   if (st.kind === "cartes") return buildQueue(false).length === 0;
   if (st.kind === "exo") return exercices.some(x => x.corrigeLe === t && x.debutLe && x.debutLe >= guide.debut);
+  if (st.kind === "questions") return briefDone();
+  if (st.kind === "mini") return exercices.some(x => x.mixte && x.corrigeLe === t);
   return false;
 }
 function startGuide() {
@@ -1245,6 +1290,8 @@ function renderGuide() {
     else if (st.kind === "memo") { const [, cid, i] = st.id.split("|"); const it = dueItems().find(x => x.kind === "chap" && x.doc.id === cid && x.i === Number(i)); body = it ? calItemLine(it, p) : null; }
     else if (st.kind === "exam") { const [, eid, i] = st.id.split("|"); const it = dueItems().find(x => x.kind === "exam" && x.doc.id === eid && x.i === Number(i)); body = it ? calItemLine(it, p) : null; }
     else if (st.kind === "prep" || st.kind === "blanc") { const task = (computePlan().get(today()) || []).find(x => x.key === st.id.slice(5)); body = task ? planTaskLine(task, true, p.prep.court.has(task.key)) : null; }
+    else if (st.kind === "questions") body = el("div", { class: "panel" }, el("div", { class: "t" }, st.label), el("div", { class: "m" }, "≈ " + fmtMin(p.nQ * Q_MIN) + " : réponds de tête, puis vérifie chaque réponse."), el("div", { class: "actions", style: "justify-content:flex-start" }, brief && brief.jour ? el("button", { class: "primary", type: "button", onclick: () => { const b = $("briefSection"); if (b) b.scrollIntoView({ block: "start" }); } }, "Voir mes questions") : el("button", { class: "primary", type: "button", onclick: () => { generateBrief(); const b = $("briefSection"); if (b) b.scrollIntoView({ block: "start" }); } }, "Préparer mes questions"), el("button", { type: "button", onclick: markBriefDone }, "J'ai fait mes questions")));
+    else if (st.kind === "mini") body = el("div", { class: "panel" }, el("div", { class: "t" }, st.label), el("div", { class: "m" }, "4 questions de chapitres et de matières différents, mélangées, 20 min chrono."), el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { class: "primary", type: "button", onclick: () => { const open = exercices.find(x => x.mixte && x.statut !== "corrige" && x.creeLe === today()); if (open) { showTab("exos"); curExo = clone(open); renderCurrentExo(); } else generateMini(); } }, "Lancer le mini-partiel")));
     else if (st.kind === "exo") { const c = suggestedChapter(); body = el("div", { class: "panel" }, el("div", { class: "t" }, "Exercice libre" + (c ? " · " + c.titre : "")), el("div", { class: "m" }, "≈ " + fmtMin(exoMin()) + " sur papier, puis correction."), el("div", { class: "actions", style: "justify-content:flex-start" }, el("button", { class: "primary", type: "button", disabled: !c || null, onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = "auto"; curExo = null; generateExercise(); } }, "Lancer l'exercice"))); }
   }
   box.replaceChildren(el("div", { class: "panel pomo-on" },
@@ -1298,7 +1345,7 @@ function renderBudget() {
   const p = dayProgram(), B = p.B;
   const inp = el("input", { type: "number", id: "budgetIn", min: "15", max: "600", step: "5", value: String(Number(reglages.minutesJour) || 90), "aria-label": "Minutes de révision par jour (temps général)" });
   inp.addEventListener("change", () => setBudget(inp.value));
-  const SEG = [["examen", "Examens du jour", "var(--exam)"], ["cartes", "Flashcards à revoir", "var(--amber)"], ["memo", "Mémorisation des cours", "#7fd1c7"], ["prepa", "Préparation des examens", "#b9a3f5"], ["nouvelles", "Nouvelles cartes", "#f59ac0"], ["exo", "Exercice libre", "#8fb8ff"]].filter(([k]) => p.parts[k] >= 0.5);
+  const SEG = [["examen", "Examens du jour", "var(--exam)"], ["cartes", "Flashcards à revoir", "var(--amber)"], ["memo", "Mémorisation des cours", "#7fd1c7"], ["prepa", "Préparation des examens", "#b9a3f5"], ["nouvelles", "Nouvelles cartes", "#f59ac0"], ["questions", "Questions du jour", "#e6c06a"], ["mini", "Mini-partiel", "#9fd38a"], ["exo", "Exercice libre", "#8fb8ff"]].filter(([k]) => p.parts[k] >= 0.5);
   const total = p.spent + p.total, scale = Math.max(B, total, 1);
   const bar = el("div", { class: "budget-bar", role: "img", "aria-label": "Fait " + fmtMin(p.spent) + ", prévu " + fmtMin(p.total) + " sur " + fmtMin(B) },
     p.spent >= 0.5 ? el("i", { style: "width:" + (100 * p.spent / scale) + "%;background:var(--ok)", title: "Déjà fait : " + fmtMin(p.spent) }) : null,
@@ -1312,6 +1359,7 @@ function renderBudget() {
   if (nCal || p.deferred) msg.push("Ne tient pas dans ton temps : " + [nMemo ? plur(nMemo, "révision de cours", "révisions de cours") : "", nPrep ? plur(nPrep, "tâche de préparation d'examen", "tâches de préparation d'examen") : "", p.deferred ? plur(p.deferred, "flashcard à revoir", "flashcards à revoir") : ""].filter(Boolean).join(", ") + ". Tout reste visible (« si tu as encore du temps ») et repasse en priorité demain.");
   if (nCourt) msg.push(nCourt + " tour" + (nCourt > 1 ? "s" : "") + " de préparation en version courte (flashcards sans exercice).");
   if (!msg.length) msg.push(total < 0.5 ? "Rien de prévu aujourd'hui." : p.left >= 5 ? "Tout tient dans ton temps, avec " + fmtMin(p.left) + " de marge." : "Tout tient dans ton temps.");
+  if (B && edtFactor(today()) < 1) msg.push("Journée chargée (" + fmtMin(edtDayMin(today())) + " de cours) : ton temps est réduit à " + fmtMin(B) + " aujourd'hui.");
   $("budgetCount").textContent = B ? fmtMin(total) + " / " + fmtMin(B) : "jour off";
   if (!B) msg.unshift("Jour off : pas de révision prévue aujourd'hui" + (p.parts.examen ? " (sauf la révision d'examen du jour)" : "") + ". Ce qui était prévu est réparti sur les jours suivants.");
   const cal = calibInfo();
@@ -1340,7 +1388,7 @@ function calItemLine(it, p, reprog) {
     return el("div", { class: "item examen" },
       el("span", { class: "chip exam" }, it.s.code),
       el("div", { class: "what" }, el("div", { class: "t" }, it.doc.intitule), el("div", { class: "m" }, it.doc.matiere + " · examen le " + pretty(it.doc.date) + " · ≈ " + fmtMin(examStepMin(it.s.code)))),
-      el("div", { class: "actions" }, el("button", { class: "done", type: "button", onclick: () => markExamDone(it.doc, it.i) }, "Fait")),
+      el("div", { class: "actions" }, el("button", { class: "done", type: "button", onclick: () => markExamDone(it.doc, it.i) }, "Fait"), isJ ? null : ficheBtn(it.doc)),
       el("div", { class: "how" }, isJ ? "Dernier tour : flashcards du programme et points clés, pas de nouvelle notion." : "La veille : flashcards du programme + un exercice type examen, puis dors bien (le sommeil consolide)."));
   }
   const st = STAGES.find(x => x.code === it.s.code) || STAGES[0], k = it.doc.id + "|" + it.i;
@@ -1405,6 +1453,7 @@ function suggestedChapter() {
     const lapses = cartes.filter(k => k.chapId === c.id).reduce((s, k) => s + (k.lapses || 0), 0);
     let score = (5 - niv) * 2 + Math.min(since, 21) / 3 + Math.min(lapses, 10) / 2 + (c.pointsFaibles || []).length;
     if (dte !== null) score += dte <= 3 ? 12 : dte <= 10 ? 7 : dte <= 21 ? 3 : 0;
+    score *= matWeight(c.matiere);
     if (score > bestScore) { bestScore = score; best = c; }
   }
   return best;
@@ -1642,6 +1691,8 @@ function renderSession() {
   const s = session;
   if (s.idx >= s.queue.length) {
     $("sessCount").textContent = "";
+    stopAudio();
+    if (s.memo && memoRun && memoRun.phase === "cartes" && !s.memoNext) { s.memoNext = true; memoRun.phase = "exo"; saveMemo(); setTimeout(() => { if (session === s) session = null; memoRunGo(); }, 1500); }
     if (s.total && !s.celebrated) { s.celebrated = true; celebrate("Séance terminée", s.ok + " cartes réussies. Ta mémoire te dit merci."); }
     box.replaceChildren(el("div", { class: "panel" },
       el("h3", {}, "Séance terminée"),
@@ -1654,6 +1705,7 @@ function renderSession() {
   const card = s.queue[s.idx], chap = chapById(card.chapId);
   if (s.t0idx !== s.idx) { s.t0idx = s.idx; s.t0 = Date.now(); }
   $("sessCount").textContent = (s.idx + 1) + " / " + s.queue.length;
+  audioOnCard(s, card);
   const previews = [0, 1, 2, 3].map(q => { const info = {}, ns = nextState(card, q, info); return { iv: diff(ns.due, today()), hint: rateHint(card, q, ns, info) }; });
   const labels = ["Raté", "Difficile", "Bien", "Facile"];
   box.replaceChildren(el("div", { class: "flash" },
@@ -1663,15 +1715,17 @@ function renderSession() {
         el("button", { class: "link", type: "button", onclick: () => { editCardId = card.id; showTab("cartes"); renderCardForm(card); $("cardForm").scrollIntoView({ block: "center" }); } }, "Modifier"))),
     s.label ? el("div", { class: "m" }, "Séance ciblée · " + s.label) : null,
     (() => { const ser = serieOf(card); if (!ser) return null; const mem = seriesMembers(ser.key), i = mem.findIndex(m => m.id === card.id); return mem.length > 1 && i >= 0 ? el("div", { class: "m" }, el("span", { class: "chip" }, "Exercice en " + mem.length + " parties · partie " + (i + 1) + "/" + mem.length), " à faire dans l'ordre") : null; })(),
+    audioBar(card),
     el("div", { class: "side" }, renderFace(card, "recto")),
     s.shown ? el("div", { class: "side verso" }, renderFace(card, "verso")) : null,
     s.shown
-      ? [el("div", { class: "rate" }, [0, 1, 2, 3].map(q => el("button", { type: "button", class: "r" + q, onclick: () => rateCard(q) }, labels[q], el("small", {}, ivLabel(previews[q].iv)), previews[q].hint ? el("small", { style: "color:var(--exam)" }, previews[q].hint) : null))),
+      ? [el("div", { class: "rate" }, [0, 1, 2, 3].map(q => el("button", { type: "button", class: "r" + q + (s.shown && s.audioSuggest === q ? " sugg" : ""), title: s.shown && s.audioSuggest === q ? "Suggestion d'après ta réponse orale" : null, onclick: () => rateCard(q) }, labels[q], el("small", {}, ivLabel(previews[q].iv)), previews[q].hint ? el("small", { style: "color:var(--exam)" }, previews[q].hint) : null))),
         s.shown && serieOf(card) && seriesMembers(serieOf(card).key).length > 1 ? el("div", { class: "hint" }, "Exercice en plusieurs parties : toutes les parties reviendront ensemble, à la date la plus proche que tu choisis dans la série.") : null,
         s.shown && previews.some(p => p.hint) ? el("div", { class: "hint" }, "En orange : carte au programme de ton partiel de " + ((examFor(chapById(card.chapId)) || {}).matiere || "") + " (" + pretty((examFor(chapById(card.chapId)) || {}).date) + "). Elle revient plus tôt que son délai normal pour être revue avant l'examen ; sinon, elle ne reviendra pas avant le délai affiché.") : null]
       : el("button", { class: "primary", type: "button", id: "revealBtn", onclick: () => { s.shown = true; renderSession(); } }, "Afficher la réponse")));
 }
 async function rateCard(q) {
+  stopAudio();
   const s = session, card = s.queue[s.idx];
   const dt = s.t0 && s.t0idx === s.idx ? Math.min(180, Math.max(2, (Date.now() - s.t0) / 1000)) : 0;
   const ns = nextState(card, q), wasNew = !!card.nouveau, ser = serieOf(card);
@@ -1831,9 +1885,10 @@ function renderCurrentExo() {
   $("exCurSec").hidden = false;
   const x = curExo, chap = chapById(x.chapId);
   const panel = el("div", { class: "panel" },
-    el("div", { class: "row" }, el("div", {}, el("div", { class: "t" }, x.titre), el("div", { class: "m" }, chapLabel(chap) + " · niveau " + x.niveau + " (" + LEVELS[x.niveau] + ")")),
+    el("div", { class: "row" }, el("div", {}, el("div", { class: "t" }, x.titre), el("div", { class: "m" }, (x.mixte ? "Mini-partiel mixte · " + (x.chapIds || []).map(id => (chapById(id) || {}).matiere).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(", ") + " · " + MINI_MIN + " min" : chapLabel(chap) + " · niveau " + x.niveau + " (" + LEVELS[x.niveau] + ")"))),
       el("button", { class: "link", type: "button", onclick: () => { curExo = null; exoPhotos = []; renderCurrentExo(); } }, "Fermer")),
     el("div", { class: "exo" }, x.enonce));
+  if (x.mixte && x.statut !== "corrige") { panel.append(el("div", { class: "row" }, el("span", { class: "hint" }, "20 minutes, sans cours : pour chaque question, demande-toi d'abord de quel chapitre elle vient et quel outil utiliser."), el("span", { class: "clock", id: "miniClock" }, "…"))); startMiniClock(x); }
   if (x.statut !== "corrige") {
     panel.append(el("div", { class: "actions", style: "justify-content:flex-start" },
       x.indice ? el("button", { type: "button", onclick: () => { exoShowHint = !exoShowHint; renderCurrentExo(); } }, exoShowHint ? "Masquer l'indice" : "Voir un indice") : null,
@@ -1883,8 +1938,9 @@ function renderCorrection(x) {
       for (const k of sugg) await write(() => db.doc("cartes/" + x.chapId + "-" + rid()).set(Object.assign(newCardBase(x.chapId), { recto: String(k.recto), verso: String(k.verso), source: "erreur" })));
       x.cartesAjoutees = true; await write(() => db.doc("exercices/" + x.id).update({ cartesAjoutees: true }), "Cartes d'erreurs ajoutées"); renderCurrentExo();
     } }, "Ajouter à mes flashcards")));
-  wrap.append(el("div", { class: "row" }, el("span", { class: "hint" }, "Niveau du chapitre maintenant : " + ((chapById(x.chapId) || {}).niveau || 1) + "/5"),
+  wrap.append(el("div", { class: "row" }, el("span", { class: "hint" }, (x.mixte ? "Mini-partiel : chaque chapitre a reçu sa note et ses points faibles" : "Niveau du chapitre maintenant : " + ((chapById(x.chapId) || {}).niveau || 1) + "/5")),
     el("button", { class: "primary", type: "button", onclick: () => { curExo = null; exoPhotos = []; exoSelf = false; exoShowHint = false; exoShowMethod = false; generateExercise(); } }, "Exercice suivant")));
+  if (memoRun && memoRun.phase === "fin") wrap.append(el("div", { class: "panel pomo-on" }, memoPanelNodes()));
   return wrap;
 }
 async function correctExercise() {
@@ -1902,7 +1958,8 @@ async function correctExercise() {
     "Corrigé de référence :\n\"\"\"\n" + x.solution + "\n\"\"\"",
     x.bareme && x.bareme.length ? "Barème : " + JSON.stringify(x.bareme) : "",
     "Règles : note sur 10 selon le barème ; accepte toute démarche juste différente du corrigé ; explique précisément POURQUOI chaque erreur est une erreur (pas seulement la bonne réponse) ; repère les points faibles de fond (notion mal comprise, erreur de méthode, erreur de calcul) ; propose 1 à 4 flashcards qui ciblent exactement ces erreurs. Formules en texte Unicode, pas de LaTeX.",
-    "Réponds uniquement avec un objet JSON : {\"note\": number, \"verdict\": string (2 phrases), \"etapes\": [{\"etape\": string, \"statut\": \"ok\"|\"erreur\"|\"manquant\", \"commentaire\": string}], \"pointsFaibles\": [string courts], \"conseil\": string, \"cartes\": [{\"recto\": string, \"verso\": string}]}"
+    x.mixte ? "C'est un MINI-PARTIEL MIXTE sur plusieurs chapitres (" + (x.chapIds || []).map(id => (chapById(id) || {}).titre).filter(Boolean).join(" ; ") + ") : note chaque question, dis pour chacune si l'outil a été bien reconnu, et remplis \"parChapitre\" avec une note sur 10 par chapitre (titre exact de la liste) et ses points faibles." : "",
+    "Réponds uniquement avec un objet JSON : {\"note\": number, \"parChapitre\": [{\"chapitre\": string, \"note\": number, \"pointsFaibles\": [string]}] (seulement pour un mini-partiel mixte), \"verdict\": string (2 phrases), \"etapes\": [{\"etape\": string, \"statut\": \"ok\"|\"erreur\"|\"manquant\", \"commentaire\": string}], \"pointsFaibles\": [string courts], \"conseil\": string, \"cartes\": [{\"recto\": string, \"verso\": string}]}"
   ].filter(Boolean).join("\n\n");
   try {
     const r = await sample.json(prompt, Object.assign({ cache: false, modelTier: "complex" }, exoPhotos.length ? { images: exoPhotos } : {}));
@@ -1912,6 +1969,7 @@ async function correctExercise() {
 }
 async function finishSelf(note) { const x = curExo; await applyResult(x, chapById(x.chapId), note, { verdict: "Auto-correction.", etapes: [], pointsFaibles: [] }); }
 async function applyResult(x, chap, note, r) {
+  if (x.mixte) return applyMixte(x, note, r);
   const correction = { verdict: String(r.verdict || ""), etapes: Array.isArray(r.etapes) ? r.etapes.slice(0, 20) : [], conseil: String(r.conseil || ""), cartes: Array.isArray(r.cartes) ? r.cartes.slice(0, 4) : [] };
   const dureeMin = x.debutLe ? Math.round((Date.now() - new Date(x.debutLe).getTime()) / 60000) : null;
   await write(() => db.doc("exercices/" + x.id).update(Object.assign({ statut: "corrige", note, correction, corrigeLe: today() }, dureeMin && dureeMin >= 3 && dureeMin <= 120 ? { dureeMin } : {})));
@@ -1928,6 +1986,7 @@ async function applyResult(x, chap, note, r) {
   Object.assign(x, { statut: "corrige", note, correction });
   exoSelf = false; exoPhotos = [];
   renderCurrentExo();
+  memoAfterExo(x);
   toast(note >= 8 ? "Bien joué : le niveau monte" : note <= 4 ? "On consolide : prochain exercice un cran plus simple" : "Correction enregistrée");
 }
 
@@ -1950,7 +2009,7 @@ function renderExHist() {
   for (const x of list.slice(0, 40)) {
     const key = "exercices/" + x.id;
     box.append(el("div", { class: "chap" },
-      el("div", { class: "t" }, x.titre, el("div", { class: "m" }, chapLabel(chapById(x.chapId)) + " · niv. " + x.niveau + " · " + pretty(x.creeLe))),
+      el("div", { class: "t" }, x.titre, el("div", { class: "m" }, (x.mixte ? "Mini-partiel mixte · " + (x.chapIds || []).length + " chapitres" : chapLabel(chapById(x.chapId))) + " · niv. " + x.niveau + " · " + pretty(x.creeLe))),
       el("span", { class: "chip " + (x.statut === "corrige" ? (x.note >= 8 ? "ok" : x.note <= 4 ? "late" : "exam") : "muted") }, x.statut === "corrige" ? x.note + "/10" : "à faire"),
       el("div", { class: "full actions", style: "justify-content:flex-start" },
         el("button", { class: "link", type: "button", onclick: () => { curExo = clone(x); exoPhotos = []; exoSelf = false; renderCurrentExo(); $("exCurSec").scrollIntoView({ block: "start" }); } }, x.statut === "corrige" ? "Revoir" : "Reprendre"),
@@ -2190,6 +2249,7 @@ function renderExams() {
       el("span", { class: "chip exam" }, j === 0 ? "aujourd'hui" : j === 1 ? "demain" : "dans " + j + " j"),
       el("div", { class: "full m" }, prog.length ? "Programme : " + prog.map(c => c.titre).join(" · ") : "Programme : tous les chapitres de " + e.matiere),
       el("div", { class: "full actions" },
+        ficheBtn(e, j <= 2 ? "Fiches de la veille (PDF)" : "Fiches de révision (PDF)"),
         el("button", { type: "button", onclick: () => openBlancSetup(e.id) }, "Examen blanc"),
         el("button", { class: "link", type: "button", onclick: () => { editing = "examens/" + e.id; renderExams(); } }, "Modifier"),
         delControls("examens", e, renderExams))));
@@ -2724,7 +2784,7 @@ function setupExtras() {
 function subscribeExtras() {
   db.collection("blancs").onSnapshot(s => { blancs = s.docs.map(d => Object.assign({ id: d.id }, d.data())); renderBlancs(); }, () => {});
   db.doc("plan/" + today()).onSnapshot(s => { planJour = s.exists ? s.data() : null; renderPlan(); renderToday(); renderBudget(); renderSuggest(); }, () => {});
-  db.doc("plan/reglages").onSnapshot(s => { if (s.exists) { const d = s.data() || {}, cur = JSON.stringify({ m: reglages.minutesJour, s: reglages.semaine || null, e: reglages.exceptions || {} }); if (JSON.stringify({ m: d.minutesJour, s: d.semaine || null, e: d.exceptions || {} }) !== cur) { reglages = Object.assign({ minutesJour: 90 }, d); renderAll(); } } }, () => {});
+  db.doc("plan/reglages").onSnapshot(s => { if (s.exists) { const d = s.data() || {}, cur = JSON.stringify({ m: reglages.minutesJour, s: reglages.semaine || null, e: reglages.exceptions || {}, n: reglages.notesVisees || {} }); if (JSON.stringify({ m: d.minutesJour, s: d.semaine || null, e: d.exceptions || {}, n: d.notesVisees || {} }) !== cur) { reglages = Object.assign({ minutesJour: 90 }, d); renderAll(); } } }, () => {});
   db.collection("plan").onSnapshot(s => { planHist = {}; for (const d of s.docs) if (/^\d{4}-\d{2}-\d{2}$/.test(d.id)) planHist[d.id] = (d.data() || {}).done || []; renderPlan(); snapshotPlan(); }, () => {});
 }
 
@@ -2780,7 +2840,7 @@ async function generateBrief() {
     const t = today();
     const recentQs = await recentBriefQuestions(3);
     const plan = briefPlan(recentQs);
-    if (!plan.rows.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
+    if (!plan.rows.length) { toast(chapitres.length ? "Jour off : pas de questions aujourd'hui." : "Ajoute d'abord un chapitre."); renderBrief(); return; }
     const prompt = briefPrompt(plan, recentQs);
     const r = await sample.json(prompt, { cache: false });
     if (!r || !Array.isArray(r.questions)) throw { code: "invalid_json" };
@@ -3132,6 +3192,971 @@ function subscribeExtras3() {
   db.collection("bilans").onSnapshot(s => { bilans = s.docs.map(d => Object.assign({ id: d.id }, d.data())); renderBilan(); }, () => {});
 }
 
+/* =====================================================================
+   NOUVEAUTÉS 4 : parcours « matière par matière », questions du jour calées sur
+   le programme, note visée, chances de se souvenir le jour J, fiches de la veille,
+   mode audio, mini-partiel mixte, cartes problématiques, emploi du temps (.ics).
+   ===================================================================== */
+const Q_MIN = 1.2, MINI_MIN = 20;
+
+/* ---------- Note visée par matière : poids du temps ----------
+   Estimation actuelle (sur 20) : examens blancs (poids 2) et exercices récents, une note d'exercice
+   comptant d'autant plus qu'il était difficile. Poids = 1 + (visée − estimée) / 8, entre 0,6 et 1,8 ;
+   sans note estimée, on part de 12/20. Sans objectif : poids 1. */
+const notesVisees = () => (reglages && reglages.notesVisees) || {};
+let matCache = { k: null, est: new Map(), w: new Map() };
+function matCacheCheck() {
+  const k = [exercices.length, blancs.length, chapitres.length, JSON.stringify(notesVisees()), exercices.filter(x => x.statut === "corrige").length, blancs.filter(b => b.statut === "corrige").length].join("|");
+  if (matCache.k !== k) matCache = { k, est: new Map(), w: new Map() };
+}
+function matEstimate(m) {
+  matCacheCheck();
+  if (matCache.est.has(m)) return matCache.est.get(m);
+  const ids = new Set(chapitres.filter(c => c.matiere === m).map(c => c.id));
+  const byDate = (a, b) => String(b.corrigeLe || "").localeCompare(String(a.corrigeLe || ""));
+  const bl = blancs.filter(b => b.statut === "corrige" && b.matiere === m && typeof b.note === "number").sort(byDate).slice(0, 3);
+  const ex = exercices.filter(x => x.statut === "corrige" && typeof x.note === "number" && !x.mixte && ids.has(x.chapId)).sort(byDate).slice(0, 8);
+  const vals = bl.map(b => ({ v: b.note, w: 2 })).concat(ex.map(x => ({ v: Math.min(20, x.note * 2) * (0.75 + 0.05 * (x.niveau || 1)), w: 1 })));
+  const v = vals.length ? Math.round(10 * vals.reduce((a, x) => a + x.v * x.w, 0) / vals.reduce((a, x) => a + x.w, 0)) / 10 : null;
+  matCache.est.set(m, v);
+  return v;
+}
+function matWeight(m) {
+  matCacheCheck();
+  if (matCache.w.has(m)) return matCache.w.get(m);
+  const target = Number(notesVisees()[m]);
+  let w = 1;
+  if (m && isFinite(target) && target > 0) { const est = matEstimate(m); w = Math.max(0.6, Math.min(1.8, 1 + (est === null ? target - 12 : target - est) / 8)); }
+  matCache.w.set(m, w);
+  return w;
+}
+function setNoteVisee(m, v) {
+  const nv = Object.assign({}, notesVisees());
+  if (v === "" || v === null || !isFinite(Number(v))) delete nv[m]; else nv[m] = Math.max(1, Math.min(20, Math.round(Number(v) * 2) / 2));
+  saveReglages({ notesVisees: nv }, nv[m] ? m + " : objectif " + String(nv[m]).replace(".", ",") + "/20" : m + " : objectif retiré");
+}
+
+/* ---------- Probabilité de se souvenir le jour J ----------
+   Modèle exponentiel : l'intervalle d'une carte est le délai au bout duquel on la réussit ≈ 9 fois sur 10.
+   Si la carte revient avant l'examen, on suppose la révision faite à sa date (réussie ou ratée selon sa
+   probabilité à ce moment-là), sans compter les révisions suivantes : l'estimation est donc prudente.
+   Carte jamais vue : 30 %. */
+const LN90 = Math.log(0.9);
+function recallAt(k, date) {
+  if (k.nouveau || !k.vueLe) return null;
+  const t = today(), S = Math.max(0.7, k.interval || 0), R = (dt, s) => Math.exp(LN90 * Math.max(0, dt) / s);
+  const due = !k.due || k.due < t ? t : k.due;
+  if (due > date) return R(diff(date, k.vueLe), S);
+  const p = R(diff(due, k.vueLe), S), S2 = Math.max(1, S * (k.ease || 2.5));
+  return p * R(diff(date, due), S2) + (1 - p) * R(diff(date, due), 1.5);
+}
+let recallCache = { arr: null, day: null, map: new Map() };
+function chapRecall(c, date) {
+  if (recallCache.arr !== cartes || recallCache.day !== today()) recallCache = { arr: cartes, day: today(), map: new Map() };
+  const key = c.id + "|" + date;
+  if (recallCache.map.has(key)) return recallCache.map.get(key);
+  const ks = cartes.filter(k => k.chapId === c.id && !k.suspendue);
+  let sum = 0, seen = 0, faibles = 0;
+  for (const k of ks) { const r = recallAt(k, date); if (r === null) { sum += 0.3; continue; } seen++; sum += r; if (r < 0.6) faibles++; }
+  const v = { p: ks.length ? sum / ks.length : null, n: ks.length, seen, faibles };
+  recallCache.map.set(key, v);
+  return v;
+}
+// Besoin de préparation d'un chapitre : niveau, points faibles, cartes ratées, chances le jour J, objectif de la matière.
+function chapNeed(c) {
+  const ks = cartes.filter(k => k.chapId === c.id);
+  const lapses = ks.reduce((s, k) => s + (k.lapses || 0), 0);
+  const fresh = ks.filter(k => k.nouveau).length;
+  const ex = examFor(c), rc = ex ? chapRecall(c, ex.date) : null;
+  return ((5 - (c.niveau || 1)) + Math.min(3, (c.pointsFaibles || []).length) + Math.min(3, lapses / 4) + (fresh > 10 ? 1 : 0) + (rc && rc.p !== null ? (1 - rc.p) * 4 : 0)) * matWeight(c.matiere);
+}
+function priority(card) {
+  const ch = chapById(card.chapId), dte = daysToExam(ch);
+  return (dte !== null && dte <= 14 ? 100 - dte : 0) + (card.lapses || 0) * 3 + (ch ? Math.round((matWeight(ch.matiere) - 1) * 20) : 0);
+}
+const pctTxt = p => p === null || p === undefined ? "—" : Math.round(p * 100) + " %";
+
+function renderObjectifs() {
+  const box = $("objBox"); if (!box || !(loaded.c && loaded.k && loaded.e)) return;
+  if (box.contains(document.activeElement)) return;
+  const mats = [...new Set(chapitres.map(c => c.matiere).concat(examens.map(e => e.matiere)))].filter(Boolean).sort();
+  if (!mats.length) { box.replaceChildren(el("div", { class: "empty" }, "Ajoute un cours pour fixer tes objectifs par matière.")); return; }
+  const nv = notesVisees();
+  const rows = mats.map(m => {
+    const est = matEstimate(m), w = matWeight(m);
+    const inp = el("input", { type: "number", min: "1", max: "20", step: "0.5", placeholder: "—", value: nv[m] !== undefined ? String(nv[m]) : "", "aria-label": "Note visée en " + m });
+    inp.addEventListener("change", () => setNoteVisee(m, inp.value));
+    return el("div", { class: "obj-row", style: mcStyle(m) },
+      el("span", { class: "name" }, m),
+      el("label", { class: "inline" }, "visée", inp, "/20"),
+      el("span", { class: "m" }, (est === null ? "niveau pas encore estimé" : "estimé ≈ " + String(est).replace(".", ",") + "/20") + (Math.abs(w - 1) >= 0.05 ? " · " + (w > 1 ? "+" : "−") + Math.round(Math.abs(w - 1) * 100) + " % de temps" : nv[m] !== undefined ? " · temps inchangé" : "")));
+  });
+  const t = today(), exams = upcomingExams().filter(e => diff(e.date, t) <= 60);
+  const examPanels = exams.map(e => {
+    const chs = examChapters(e).map(c => ({ c, r: chapRecall(c, e.date) })).sort((a, b) => (a.r.p ?? 2) - (b.r.p ?? 2));
+    const all = chs.filter(x => x.r.p !== null), avg = all.length ? all.reduce((a, x) => a + x.r.p * x.r.n, 0) / Math.max(1, all.reduce((a, x) => a + x.r.n, 0)) : null;
+    return el("div", { class: "panel prog" },
+      el("div", { class: "row" }, el("div", { class: "t" }, e.matiere + " · " + e.intitule), el("span", { class: "chip exam" }, (diff(e.date, t) === 0 ? "aujourd'hui" : "J-" + diff(e.date, t)) + " · " + pctTxt(avg) + " retenu")),
+      chs.length ? chs.map(({ c, r }) => el("div", { class: "prog-row", style: mcStyle(c.matiere) },
+        el("div", { class: "name" }, c.titre),
+        el("span", { class: "mono", style: "color:" + (r.p === null ? "var(--muted)" : r.p < 0.6 ? "var(--late)" : r.p < 0.8 ? "var(--exam)" : "var(--ok)") }, r.p === null ? "pas de cartes" : pctTxt(r.p)),
+        el("div", { class: "bar" }, el("i", { style: "width:" + Math.max(3, Math.round(100 * (r.p || 0))) + "%" })),
+        el("div", { class: "row", style: "grid-column:1/-1" }, el("span", { class: "m" }, r.n ? r.n + " cartes · " + (r.n - r.seen ? (r.n - r.seen) + " jamais vues · " : "") + r.faibles + " fragiles le jour J" : "génère des cartes pour suivre ce chapitre"),
+          r.n ? el("button", { class: "link", type: "button", onclick: () => { showTab("cartes"); startSession({ chapIds: [c.id], label: c.titre + " (chapitre fragile)" }); } }, "Réviser") : null))) : el("div", { class: "hint" }, "Aucun chapitre au programme."));
+  });
+  box.replaceChildren(el("div", { class: "panel" }, el("div", { class: "t" }, "Note visée par matière"), el("div", { class: "obj-list" }, rows),
+    el("div", { class: "hint" }, "Laisse vide si tu n'as pas d'objectif. Le niveau estimé vient de tes examens blancs et exercices (un exercice difficile compte plus).")),
+    ...(examPanels.length ? [el("h3", {}, "Ce que tu retiendras le jour J"), ...examPanels] : []));
+}
+
+/* ---------- Questions du jour : nombre et chapitres calés sur le programme, les examens et le temps ---------- */
+// ≈ 1 question pour 9 min de révision prévues (4 à 15) ; un jour off : rien, sauf la veille ou le jour d'un examen (4).
+function briefCount(d) {
+  d = d || today();
+  if (!chapitres.length) return 0;
+  const B = budgetJour(d);
+  if (!B) return upcomingExams().some(e => diff(e.date, d) >= 0 && diff(e.date, d) <= 1) ? 4 : 0;
+  return Math.max(4, Math.min(15, Math.round(B / 9)));
+}
+const briefDone = () => !!(brief && brief.faites === today());
+function briefPlan(recentQs) {
+  const t = today(), prg = dayProgram(), TOTAL = briefCount(), B = prg.B;
+  if (!TOTAL) return { rows: [], blanc: [], total: 0, B, prog: [] };
+  const planDay = computePlan().get(t) || [];
+  const planChap = planDay.filter(x => x.kind === "chap" && !prg.prep.extra.has(x.key));
+  const dueMap = new Map(), laterMap = new Map();
+  for (const it of dueItems()) if (it.kind === "chap") { const m = prg.cal.fit.has(it.doc.id + "|" + it.i) ? dueMap : laterMap; if (!m.has(it.doc.id)) m.set(it.doc.id, it.s.code); }
+  const examNow = new Map();
+  for (const it of dueItems()) if (it.kind === "exam") for (const c of examChapters(it.doc)) examNow.set(c.id, it.s.code + " de « " + it.doc.intitule + " »");
+  let rows = chapitres.map(c => {
+    const ex = examFor(c), dte = ex ? diff(ex.date, t) : null, tour = planChap.find(x => x.chapId === c.id) || null, stage = dueMap.get(c.id) || null, later = laterMap.get(c.id) || null;
+    const ks = cartes.filter(k => k.chapId === c.id), hard = ks.filter(k => (k.lapses || 0) >= 2).map(k => k.recto).slice(0, 4);
+    const lowEx = (c.historiqueExos || []).filter(h => h.note <= 5).slice(-3).map(h => h.titre);
+    const seen = (c.etapes || []).map(s => s.fait).concat(ks.map(k => k.vueLe), (c.historiqueExos || []).map(h => h.date)).filter(Boolean).sort();
+    const idle = seen.length ? diff(t, seen[seen.length - 1]) : 30;
+    let w = 1 + (5 - (c.niveau || 1)) * 0.5 + Math.min(hard.length, 5) * 0.4 + Math.min((c.pointsFaibles || []).length, 4) * 0.4 + (idle >= 7 ? 1.5 : 0);
+    const raisons = [];
+    if (stage) { w += 4; raisons.push("au programme du jour : révision " + stage); }
+    else if (later) { w += 1; raisons.push("révision " + later + " reportée faute de temps"); }
+    if (tour) { w += 4; raisons.push("au programme du jour : tour " + tour.tour + "/" + tour.tours + " pour « " + tour.exam.intitule + " »"); }
+    if (examNow.has(c.id)) { w += 6; raisons.push(examNow.get(c.id)); }
+    if (dte !== null && dte <= 21) { w += dte <= 2 ? 8 : dte <= 7 ? 6 : 3; raisons.push("examen " + (dte === 0 ? "aujourd'hui" : dte === 1 ? "demain" : "dans " + dte + " j") + " (" + ex.intitule + ")"); }
+    const rc = ex && dte !== null && dte <= 30 ? chapRecall(c, ex.date) : null;
+    if (rc && rc.p !== null && rc.p < 0.6) { w += 2; raisons.push("≈ " + pctTxt(rc.p) + " de chances de t'en souvenir le jour J"); }
+    if (idle >= 7) raisons.push("pas travaillé depuis " + idle + " j (entretien)");
+    const mw = matWeight(c.matiere); w *= mw;
+    if (mw >= 1.15) raisons.push("objectif " + String(notesVisees()[c.matiere]).replace(".", ",") + "/20 en " + c.matiere);
+    return { c, w, raisons, dte, tour, stage, hard, lowEx, types: briefTypes(stage || later, tour, dte), slots: 0 };
+  }).sort((a, b) => b.w - a.w);
+  // Jour off avec examen le lendemain ou le jour même : seulement le programme de cet examen.
+  if (!B) rows = rows.filter(r => r.dte !== null && r.dte <= 1);
+  const chosen = [], mats = new Set();
+  for (const r of rows) if (!mats.has(r.c.matiere)) { mats.add(r.c.matiere); chosen.push(r); }
+  for (const r of rows) if (!chosen.includes(r)) chosen.push(r);
+  const pick = chosen.slice(0, Math.min(TOTAL, Math.max(Math.ceil(TOTAL * 0.6), Math.min(mats.size, TOTAL))));
+  pick.forEach(r => r.slots = 1);
+  let used = pick.length;
+  while (used < TOTAL && pick.length) {
+    const r = pick.filter(x => x.slots < 3).sort((a, b) => b.w / (b.slots + 1) - a.w / (a.slots + 1))[0]; if (!r) break; r.slots++; used++;
+  }
+  const exR = pick.filter(r => r.dte !== null && r.dte <= 21);
+  if (exR.length) {
+    const target = Math.ceil(used * (exR.some(r => r.dte <= 7) ? 0.7 : 0.5));
+    let guard = 30;
+    while (guard-- && exR.reduce((a, r) => a + r.slots, 0) < target) {
+      const from = pick.filter(r => !exR.includes(r) && r.slots > 1).sort((a, b) => b.slots - a.slots)[0];
+      const to = exR.filter(r => r.slots < 4).sort((a, b) => (a.dte - b.dte) || (b.w - a.w))[0];
+      if (!from || !to) break; from.slots--; to.slots++;
+    }
+  }
+  const usage = {};
+  for (const r of [...pick].sort((a, b) => b.w - a.w)) {
+    const recentT = new Set(recentQs.filter(q => q.chapitre === r.c.titre).map(q => q.type));
+    r.qtypes = [];
+    for (let n = 0; n < r.slots; n++) {
+      const cand = r.types.filter(x => !r.qtypes.includes(x)).map((x, idx) => ({ x, score: idx + (recentT.has(x) ? 4 : 0) + (usage[x] || 0) * 3 })).sort((a, b) => a.score - b.score)[0];
+      const x = cand ? cand.x : r.types[n % r.types.length];
+      r.qtypes.push(x); usage[x] = (usage[x] || 0) + 1;
+    }
+  }
+  const prog = [];
+  for (const it of dueItems()) if (it.kind === "exam") prog.push(it.s.code + " de l'examen « " + it.doc.intitule + " »");
+  for (const it of dueItems()) if (it.kind === "chap" && prg.cal.fit.has(it.doc.id + "|" + it.i)) prog.push("révision " + it.s.code + " de " + it.doc.matiere + " · " + it.doc.titre);
+  for (const x of planChap) prog.push("tour " + x.tour + "/" + x.tours + " de " + x.chap.titre + " pour « " + x.exam.intitule + " »");
+  return { rows: pick.filter(r => r.slots > 0), blanc: planDay.filter(x => x.kind === "blanc"), total: used, B, prog };
+}
+function briefPrompt(plan, recentQs) {
+  const lines = plan.rows.map(r => {
+    const c = r.c;
+    return "- " + c.matiere + " · " + c.titre + " → " + r.slots + " question" + (r.slots > 1 ? "s" : "") + " de type : " + r.qtypes.map(x => x + " (" + Q_TYPES[x] + ")").join(" ; ") +
+      (r.raisons.length ? "\n  Pourquoi aujourd'hui : " + r.raisons.join(" ; ") : "") +
+      "\n  Niveau en exercices : " + (c.niveau || 1) + "/5" + (c.notions ? " ; notions : " + c.notions : "") +
+      ((c.pointsFaibles || []).length ? "\n  Points faibles : " + c.pointsFaibles.join(" / ") : "") +
+      (r.hard.length ? "\n  Cartes souvent ratées : " + r.hard.join(" / ") : "") +
+      (r.lowEx.length ? "\n  Exercices ratés récemment : " + r.lowEx.join(" / ") : "");
+  });
+  const exams = upcomingExams().filter(e => diff(e.date, today()) <= 21).map(e => e.matiere + " (" + e.intitule + ") " + pretty(e.date) + ", J-" + diff(e.date, today()));
+  const nv = Object.entries(notesVisees()).map(([m, v]) => m + " : " + v + "/20" + (matEstimate(m) !== null ? " (niveau estimé " + matEstimate(m) + ")" : ""));
+  return [
+    "Tu prépares les questions de rappel actif du jour pour " + etu() + ". Objectif : les révisions les plus efficaces possibles aujourd'hui (rappel actif, entrelacement, difficulté désirable, ciblage des erreurs).",
+    "Nombre de questions : exactement " + plan.total + " (≈ " + fmtMin(plan.total * Q_MIN) + "), calé sur son temps de révision du jour (" + (plan.B ? fmtMin(plan.B) : "jour off, seulement l'examen tout proche") + ").",
+    plan.prog.length ? "Son programme du jour : " + plan.prog.join(" ; ") + ". Les questions doivent préparer ou consolider ce programme en priorité." : "",
+    exams.length ? "Examens à venir : " + exams.join(" ; ") + "." : "",
+    nv.length ? "Ses objectifs de note : " + nv.join(" ; ") + "." : "",
+    plan.blanc.length ? "Aujourd'hui, le planning prévoit aussi un examen blanc de " + plan.blanc.map(b => b.exam.matiere).join(", ") + " : ne le dévoile pas, prépare plutôt les méthodes utiles." : "",
+    "Répartition imposée (chapitre → nombre de questions et types à utiliser, dans cet ordre de préférence) :\n" + lines.join("\n"),
+    "Types : " + Object.entries(Q_TYPES).map(([k, v]) => k + " = " + v).join(" ; ") + ".",
+    "Règles : respecte le nombre et les types demandés ; jamais deux questions de suite sur la même matière ; vise un niveau légèrement au-dessus du niveau indiqué (effort de mémoire) sans dépasser le programme ; cible d'abord les points faibles, cartes ratées et exercices ratés ; pour le type « erreur », écris le raisonnement faux dans la question ; pour « partiel », une question complète mais faisable en 3 à 5 minutes ; la veille et le jour d'un examen, uniquement les points clés et les pièges, aucune notion nouvelle. Réponse exacte et courte (2 à 4 lignes pour « partiel », avec la méthode). Formules en texte Unicode, sans LaTeX.",
+    recentQs.length ? "Questions déjà posées ces derniers jours (n'en pose pas de semblables, change d'angle) :\n- " + recentQs.slice(0, 30).map(q => q.q).join("\n- ") : "",
+    "Réponds uniquement avec un objet JSON : {\"resume\": string (1 à 2 phrases : ce qui est au programme aujourd'hui et pourquoi), \"questions\": [{\"matiere\": string, \"chapitre\": string, \"type\": string (une clé de la liste), \"q\": string, \"r\": string}]}"
+  ].filter(Boolean).join("\n\n");
+}
+async function markBriefDone() {
+  const t = today(), cur = brief ? clone(brief) : {};
+  cur.faites = cur.faites === t ? null : t;
+  brief = cur; renderBrief(); renderBudget();
+  await write(() => db.doc("briefs/" + t).set(cur), cur.faites ? "Questions du jour faites" : null);
+}
+function renderBrief() {
+  const box = $("briefBox"); if (!box) return;
+  box.replaceChildren();
+  const btn = $("briefBtn"); if (btn) btn.textContent = brief && brief.jour ? "Nouvelles questions" : "Préparer mes questions";
+  const n = loaded.c && loaded.e ? briefCount() : 0;
+  if (loaded.c && loaded.e && loaded.k) box.append(el("div", { class: "hint" }, n ? n + " questions aujourd'hui (≈ " + fmtMin(n * Q_MIN) + "), d'après ton temps de révision, ton programme du jour et tes examens." : jourOff() ? "Jour off : pas de questions aujourd'hui." : ""));
+  if (!brief) return;
+  let any = false;
+  for (const moment of ["jour", "matin", "soir"]) {
+    const b = brief[moment]; if (!b) continue;
+    any = true;
+    const card = el("div", { class: "panel" }, el("div", {}, el("span", { class: "chip" }, moment === "matin" ? "Ce matin" : moment === "soir" ? "Ce soir" : "Aujourd'hui")), b.resume ? el("p", {}, b.resume) : null);
+    const qs = Array.isArray(b.questions) ? b.questions : [];
+    if (qs.length) card.append(el("ol", { class: "qs" }, qs.map(q => el("li", {},
+      el("div", {}, el("div", {}, q.q || ""), el("div", { class: "qm" }, [q.matiere, q.chapitre, q.type && Q_TYPES[q.type] ? Q_TYPES[q.type] : q.type].filter(Boolean).join(" · "))),
+      q.r ? el("details", {}, el("summary", {}, "Vérifier ma réponse"), el("div", {}, q.r)) : null))));
+    box.append(card);
+  }
+  if (any) box.append(el("div", { class: "row" }, el("span", { class: "hint" }, "Réponds de tête (ou par écrit) avant de vérifier."), el("button", { type: "button", class: briefDone() ? "done" : "", onclick: markBriefDone }, briefDone() ? "Questions faites ✓" : "J'ai fait mes questions")));
+}
+
+/* ---------- Mémorisation : lancer automatiquement, matière par matière, les flashcards puis un exercice ---------- */
+let memoRun = null;
+try { const m = JSON.parse(localStorage.getItem("rev-memo") || "null"); if (m && m.date === iso(new Date())) memoRun = m; } catch (e) {}
+const saveMemo = () => { try { localStorage.setItem("rev-memo", JSON.stringify(memoRun)); } catch (e) {} };
+function memoGroups(p) {
+  const items = dueItems().filter(it => it.kind === "chap" && p.cal.fit.has(it.doc.id + "|" + it.i));
+  const g = new Map();
+  for (const it of items) { const m = it.doc.matiere; if (!g.has(m)) g.set(m, []); g.get(m).push(it); }
+  return [...g.entries()].map(([matiere, list]) => {
+    const chapIds = [...new Set(list.map(it => it.doc.id))];
+    const withTour = chapIds.find(id => p.prep.merged.has(id) && !p.prep.court.has(p.prep.merged.get(id).key));
+    const sorted = list.slice().sort((a, b) => (b.late - a.late) || ((a.doc.niveau || 1) - (b.doc.niveau || 1)));
+    const exoChap = withTour || sorted[0].doc.id;
+    return { matiere, chapIds, keys: list.map(it => it.doc.id + "|" + it.i), exoChap, lvl: withTour ? tourLevel(p.prep.merged.get(withTour)) : null, nCards: cartes.filter(k => chapIds.includes(k.chapId) && !k.suspendue).length };
+  });
+}
+function startMemoRun(onlyMat) {
+  let mats = memoGroups(dayProgram());
+  if (onlyMat) mats = mats.filter(m => m.matiere === onlyMat);
+  if (!mats.length) return toast("Aucune révision de cours à lancer aujourd'hui.");
+  memoRun = { date: today(), mats, i: 0, phase: "cartes" }; saveMemo();
+  memoRunGo();
+}
+function memoRunGo() {
+  renderMemoBar();
+  if (!memoRun) return;
+  const m = memoRun.mats[memoRun.i];
+  if (!m) return memoRunEnd();
+  if (memoRun.phase === "cartes") {
+    const ok = m.nCards && cartes.some(k => m.chapIds.includes(k.chapId) && !k.suspendue);
+    if (ok) {
+      showTab("cartes");
+      startSession({ chapIds: m.chapIds, label: m.matiere + " · mémorisation (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ")" });
+      if (session && session.queue.length) { session.memo = true; renderMemoBar(); return; }
+      session = null; renderSession();
+    }
+    memoRun.phase = "exo"; saveMemo();
+  }
+  if (memoRun.phase === "exo") {
+    const c = chapById(m.exoChap);
+    if (c && sample && !(typeof AI !== "undefined" && AI && AI.ready && !AI.ready())) {
+      showTab("exos"); $("exChap").value = c.id; $("exLvl").value = m.lvl ? String(m.lvl) : "auto";
+      curExo = null; exoPhotos = []; exoSelf = false; exoShowHint = false; exoShowMethod = false;
+      renderMemoBar(); generateExercise(); return;
+    }
+    toast("IA indisponible : exercice passé.");
+    memoRun.phase = "fin"; saveMemo();
+  }
+  renderMemoBar();
+  const bar = $("memoBar"); if (bar) bar.scrollIntoView({ block: "start" });
+}
+function memoAfterExo(x) {
+  if (!memoRun || memoRun.phase !== "exo") return;
+  const m = memoRun.mats[memoRun.i]; if (!m || x.chapId !== m.exoChap) return;
+  memoRun.phase = "fin"; saveMemo(); renderMemoBar();
+}
+async function memoMarkAndNext(mark) {
+  if (!memoRun) return;
+  const m = memoRun.mats[memoRun.i];
+  if (mark && m) {
+    const byChap = new Map();
+    for (const k of m.keys) { const [cid, i] = k.split("|"); if (!byChap.has(cid)) byChap.set(cid, []); byChap.get(cid).push(Number(i)); }
+    for (const [cid, idxs] of byChap) {
+      const c = chapById(cid); if (!c) continue;
+      const et = bodyOf(c).etapes, t = today();
+      for (const i of idxs.sort((a, b) => a - b)) { if (!et[i] || et[i].fait) continue; const base = et[i].offset; et[i].fait = t; for (let j = i + 1; j < et.length; j++) if (!et[j].fait) et[j].due = addDays(t, et[j].offset - base); }
+      await write(() => db.doc("chapitres/" + cid).update({ etapes: et }));
+      const tour = dayProgram().prep.merged.get(cid);
+      if (tour && !((planJour && planJour.done) || []).includes(tour.key)) await togglePlanDone(tour.key);
+    }
+    toast(m.matiere + " : révisions cochées");
+  }
+  memoRun.i++; memoRun.phase = "cartes"; saveMemo();
+  if (memoRun.i >= memoRun.mats.length) return memoRunEnd();
+  memoRunGo();
+}
+function memoSkip() {
+  if (!memoRun) return;
+  if (memoRun.phase === "cartes") { session = null; renderSession(); memoRun.phase = "exo"; saveMemo(); memoRunGo(); }
+  else if (memoRun.phase === "exo") { memoRun.phase = "fin"; saveMemo(); renderMemoBar(); }
+  else memoMarkAndNext(false);
+}
+function memoRunEnd() {
+  const n = memoRun ? memoRun.mats.length : 0;
+  memoRun = null; saveMemo(); renderMemoBar();
+  showTab("jour"); renderToday();
+  if (n) celebrate("Mémorisation terminée", n + " matière" + (n > 1 ? "s" : "") + " révisée" + (n > 1 ? "s" : "") + ", bravo.");
+}
+function memoPanelNodes() {
+  const m = memoRun && memoRun.mats[memoRun.i]; if (!m) return [];
+  const steps = memoRun.mats.map((x, i) => el("span", { class: "chip " + (i < memoRun.i ? "ok" : i === memoRun.i ? "exam" : "muted") }, x.matiere));
+  const phase = memoRun.phase === "cartes" ? "flashcards" : memoRun.phase === "exo" ? "exercice" : "bilan";
+  return [
+    el("div", { class: "row" }, el("div", { class: "t" }, "Mémorisation · " + m.matiere + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ") · étape : " + phase), el("span", { class: "actions" }, steps)),
+    memoRun.phase === "fin"
+      ? el("div", { class: "actions", style: "justify-content:flex-start" },
+          el("button", { class: "primary", type: "button", onclick: () => memoMarkAndNext(true) }, "Cocher " + (m.keys.length > 1 ? "les " + m.keys.length + " révisions" : "la révision") + " de " + m.matiere + " et " + (memoRun.i + 1 < memoRun.mats.length ? "passer à " + memoRun.mats[memoRun.i + 1].matiere : "terminer")),
+          el("button", { type: "button", onclick: () => memoMarkAndNext(false) }, "Continuer sans cocher"))
+      : el("div", { class: "m" }, memoRun.phase === "cartes" ? "Les flashcards des chapitres du jour de " + m.matiere + ", puis un exercice démarre tout seul." : "Fais l'exercice sur papier puis fais-le corriger : la suite s'affiche ensuite."),
+    el("div", { class: "actions", style: "justify-content:flex-start" },
+      memoRun.phase !== "fin" ? el("button", { type: "button", onclick: memoSkip }, memoRun.phase === "cartes" ? "Passer à l'exercice" : "Passer l'exercice") : null,
+      el("button", { class: "link", type: "button", onclick: () => { memoRun = null; saveMemo(); renderMemoBar(); toast("Parcours arrêté"); } }, "Arrêter le parcours"))];
+}
+function renderMemoBar() {
+  const bar = $("memoBar"); if (!bar) return;
+  if (memoRun && memoRun.date !== today()) { memoRun = null; saveMemo(); }
+  bar.hidden = !memoRun;
+  bar.replaceChildren(...(memoRun ? memoPanelNodes() : []));
+}
+function renderToday() {
+  const box = $("todayList");
+  if (!(loaded.c && loaded.e)) return;
+  const items = dueItems();
+  $("todayCount").textContent = items.length ? String(items.length) : "";
+  box.replaceChildren();
+  renderMemoBar();
+  if (!items.length) {
+    box.append(el("div", { class: "empty" }, chapitres.length
+      ? "Rien à mémoriser aujourd'hui. Si tu as eu cours, ajoute-le dans l'onglet Cours : son rappel libre apparaîtra ici."
+      : "Aucun cours enregistré. Importe un cours ou saisis un cours vu dans l'onglet Cours."));
+    return;
+  }
+  const p = loaded.k ? dayProgram() : NO_PROG;
+  const fit = [], extra = [];
+  for (const it of items) (it.kind === "chap" && p.cal.extra.has(it.doc.id + "|" + it.i) ? extra : fit).push(it);
+  const groups = loaded.k ? memoGroups(p) : [];
+  if (groups.length) box.append(el("div", { class: "panel memo-launch" }, el("div", { class: "row" },
+    el("span", { class: "hint", style: "flex:1;min-width:200px" }, "Enchaîne tout seul, matière par matière : les flashcards des chapitres du jour, puis un exercice, puis la matière suivante."),
+    el("button", { class: "primary", type: "button", onclick: () => startMemoRun() }, groups.length > 1 ? "Tout lancer (" + groups.length + " matières)" : "Lancer " + groups[0].matiere))));
+  fit.filter(it => it.kind === "exam").forEach(it => box.append(calItemLine(it, p)));
+  const byMat = new Map();
+  for (const it of fit.filter(x => x.kind === "chap")) { if (!byMat.has(it.doc.matiere)) byMat.set(it.doc.matiere, []); byMat.get(it.doc.matiere).push(it); }
+  for (const [m, list] of byMat) {
+    const g = groups.find(x => x.matiere === m);
+    if (byMat.size > 1 || g) box.append(el("div", { class: "memo-mat" }, el("span", { class: "chip mat", style: mcStyle(m) }, m),
+      el("span", { class: "m" }, list.length + (list.length > 1 ? " révisions" : " révision") + (g ? " · " + (g.nCards ? g.nCards + " cartes + " : "") + "1 exercice" : "")),
+      g ? el("button", { type: "button", onclick: () => startMemoRun(m) }, "Lancer " + m) : null));
+    list.forEach(it => box.append(calItemLine(it, p)));
+  }
+  if (extra.length) { const sch = loaded.k ? calSchedule(p) : new Map(); box.append(el("details", { class: "more" }, el("summary", {}, (jourOff() ? "Jour off : " : "Si tu as encore du temps ") + "(" + extra.length + ") — sinon, réparties automatiquement sur les jours suivants"), el("div", { class: "list", style: "margin-top:8px" }, extra.map(it => calItemLine(it, p, it.kind === "chap" ? (sch.get(it.doc.id + "|" + it.i) || null) : undefined))))); }
+}
+
+/* ---------- Fiches de la veille (PDF, une page par chapitre) ---------- */
+let pdfLibs = null;
+function loadPdfLibs() {
+  if (!pdfLibs) pdfLibs = (async () => {
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+    return { h2c: window.html2canvas, jsPDF: window.jspdf.jsPDF };
+  })().catch(e => { pdfLibs = null; throw e; });
+  return pdfLibs;
+}
+async function saveBlob(filename, blob) {
+  if (window.desktop && window.desktop.apiVersion >= 2 && window.desktop.saveFile) { const ok = await window.desktop.saveFile(filename, new Uint8Array(await blob.arrayBuffer())); if (!ok) throw { code: "declined" }; return; }
+  const dl = window.claude && window.claude.use ? await window.claude.use("downloads").catch(() => null) : null;
+  if (dl) { await dl.save({ filename, data: blob }); return; }
+  const a = el("a", { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a); a.click(); a.remove();
+}
+async function ficheData(c, force) {
+  if (!force && c.fiche && c.fiche.genereLe && diff(today(), String(c.fiche.genereLe).slice(0, 10)) <= 3) return c.fiche;
+  const texte = await getTexte(c.id);
+  const hard = cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 2).sort((a, b) => (b.lapses || 0) - (a.lapses || 0)).slice(0, 8).map(k => k.recto + " → " + String(k.verso || "").slice(0, 160));
+  const lowEx = (c.historiqueExos || []).filter(h => h.note <= 6).slice(-4).map(h => h.titre + " (" + h.note + "/10)");
+  const r = await sample.json([
+    "Tu rédiges la FICHE DE LA VEILLE D'EXAMEN d'un chapitre pour " + etu() + ". Elle doit tenir sur UNE page A4 et se relire en 5 minutes : phrases très courtes, aucun blabla.",
+    "Chapitre : " + c.matiere + " · " + c.titre + (c.notions ? "\nNotions : " + c.notions : ""),
+    (c.pointsFaibles || []).length ? "Ses points faibles constatés :\n- " + c.pointsFaibles.join("\n- ") : "",
+    hard.length ? "Ses cartes les plus ratées :\n- " + hard.join("\n- ") : "",
+    lowEx.length ? "Exercices ratés : " + lowEx.join(" ; ") : "",
+    texte ? "Contenu du cours (extrait) :\n\"\"\"\n" + texte.slice(0, 40000) + "\n\"\"\"" : "Pas de texte de cours importé : appuie-toi sur le titre, les notions et le programme habituel de ce niveau.",
+    "Contenu : 6 à 9 points clés (une phrase chacun) ; jusqu'à 8 formules, chacune avec ses conditions d'application ; 3 à 5 erreurs fréquentes DE CET ÉTUDIANT d'après ses points faibles, cartes et exercices ratés (sinon les erreurs classiques), chacune avec la bonne version ; 3 à 4 pièges d'examen ; une méthode type en 3 à 5 étapes ; une phrase « si tu ne retiens qu'une chose ». Formules en texte Unicode, sans LaTeX.",
+    "Réponds uniquement avec un objet JSON : {\"points\": [string], \"formules\": [{\"formule\": string, \"conditions\": string}], \"erreurs\": [{\"erreur\": string, \"correction\": string}], \"pieges\": [string], \"methode\": [string], \"essentiel\": string}"
+  ].filter(Boolean).join("\n\n"), { cache: false });
+  if (!r || !Array.isArray(r.points) || !r.points.length) throw { code: "invalid_json" };
+  const S = (a, n, f) => (Array.isArray(a) ? a : []).slice(0, n).map(f);
+  const fiche = { genereLe: new Date().toISOString(), points: S(r.points, 9, String), formules: S(r.formules, 8, x => ({ formule: String((x && x.formule) || x || ""), conditions: String((x && x.conditions) || "") })),
+    erreurs: S(r.erreurs, 5, x => ({ erreur: String((x && x.erreur) || x || ""), correction: String((x && x.correction) || "") })), pieges: S(r.pieges, 4, String), methode: S(r.methode, 5, String), essentiel: String(r.essentiel || "") };
+  await write(() => db.doc("chapitres/" + c.id).update({ fiche }));
+  c.fiche = fiche;
+  return fiche;
+}
+function fichePage(c, f, ex) {
+  const css = (o) => Object.entries(o).map(([k, v]) => k.replace(/[A-Z]/g, m => "-" + m.toLowerCase()) + ":" + v).join(";");
+  const hex = matColor(c.matiere), col = "#" + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * 0.55).toString(16).padStart(2, "0")).join("");
+  const H = (t) => el("div", { style: css({ font: "800 12px 'Nunito Sans',Arial,sans-serif", textTransform: "uppercase", letterSpacing: ".08em", color: col, margin: "14px 0 6px", borderBottom: "1.5px solid " + col, paddingBottom: "3px" }) }, t);
+  const li = (kids) => el("li", { style: css({ margin: "0 0 4px" }) }, kids);
+  const ul = (arr) => el("ul", { style: css({ margin: "0", paddingLeft: "18px" }) }, arr);
+  return el("div", { style: css({ width: "794px", minHeight: "1123px", boxSizing: "border-box", padding: "40px 46px", background: "#ffffff", color: "#1b1f2a", font: "13px/1.45 'Nunito Sans',Arial,sans-serif" }) },
+    el("div", { style: css({ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "12px" }) },
+      el("div", {}, el("div", { style: css({ font: "700 11px 'Nunito Sans',Arial,sans-serif", color: col, textTransform: "uppercase", letterSpacing: ".1em" }) }, c.matiere + " · fiche de la veille"),
+        el("div", { style: css({ font: "600 24px Fraunces,Georgia,serif", margin: "2px 0 0" }) }, c.titre)),
+      el("div", { style: css({ font: "12px 'JetBrains Mono',monospace", color: "#555", textAlign: "right", whiteSpace: "pre-line" }) }, ex ? ex.intitule + "\n" + pretty(ex.date) : "")),
+    f.essentiel ? el("div", { style: css({ marginTop: "14px", background: "#fff4e0", border: "1px solid #f2b35c", borderRadius: "10px", padding: "10px 14px", fontWeight: "700" }) }, "Si tu ne retiens qu'une chose : " + f.essentiel) : null,
+    H("Points clés"), ul(f.points.map(p => li(p))),
+    f.formules.length ? [H("Formules et conditions"), el("table", { style: css({ width: "100%", borderCollapse: "collapse" }) }, f.formules.map(x => el("tr", {},
+      el("td", { style: css({ font: "500 12.5px 'JetBrains Mono',monospace", color: "#1b1f2a", padding: "4px 8px 4px 0", verticalAlign: "top", width: "52%", borderBottom: "1px solid #eee" }) }, x.formule),
+      el("td", { style: css({ padding: "4px 0", verticalAlign: "top", color: "#444", fontSize: "12.5px", borderBottom: "1px solid #eee" }) }, x.conditions))))] : null,
+    f.erreurs.length ? [H("Tes erreurs fréquentes"), ul(f.erreurs.map(x => li([el("span", { style: "color:#c0392b;font-weight:700" }, "✗ " + x.erreur), x.correction ? el("span", {}, " → " + x.correction) : null])))] : null,
+    el("div", { style: css({ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 22px" }) },
+      el("div", {}, f.pieges.length ? [H("Pièges d'examen"), ul(f.pieges.map(p => li(p)))] : null),
+      el("div", {}, f.methode.length ? [H("Méthode type"), el("ol", { style: css({ margin: "0", paddingLeft: "18px" }) }, f.methode.map(p => li(p)))] : null)),
+    el("div", { style: css({ marginTop: "16px", font: "10.5px 'Nunito Sans',Arial,sans-serif", color: "#888" }) }, "Relis-la une fois ce soir, cache-la, puis récite les points clés de mémoire. Ensuite, dors : le sommeil consolide."));
+}
+let ficheBusy = false;
+async function ficheVeille(exam, force) {
+  if (ficheBusy) return;
+  if (!sample || (typeof AI !== "undefined" && AI && AI.ready && !AI.ready())) return toast("L'IA n'est pas disponible : vérifie ta clé ou tes autorisations.");
+  const chs = examChapters(exam);
+  if (!chs.length) return toast("Ajoute d'abord des chapitres au programme de cet examen.");
+  ficheBusy = true;
+  const out = $("ficheOut");
+  const step = msg => { if (out) out.replaceChildren(busy(msg)); else toast(msg); };
+  try {
+    const fiches = [];
+    for (let i = 0; i < chs.length; i++) { step("Fiche " + (i + 1) + "/" + chs.length + " : « " + chs[i].titre + " »…"); fiches.push(await ficheData(chs[i], force)); }
+    step("Mise en page du PDF…");
+    const { h2c, jsPDF } = await loadPdfLibs();
+    const doc = new jsPDF({ unit: "pt", format: "a4" }), W = doc.internal.pageSize.getWidth(), Hh = doc.internal.pageSize.getHeight();
+    const host = el("div", { style: "position:fixed;left:-12000px;top:0;width:794px;background:#fff;z-index:-1" });
+    document.body.append(host);
+    try {
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      for (let i = 0; i < chs.length; i++) {
+        host.replaceChildren(fichePage(chs[i], fiches[i], exam));
+        const cv = await h2c(host.firstChild, { scale: 2, backgroundColor: "#ffffff", logging: false });
+        if (i) doc.addPage();
+        let w = W, h = cv.height * W / cv.width;
+        if (h > Hh) { w = w * Hh / h; h = Hh; }
+        doc.addImage(cv.toDataURL("image/jpeg", 0.9), "JPEG", (W - w) / 2, 0, w, h);
+      }
+    } finally { host.remove(); }
+    await saveBlob("fiches-veille-" + slug(exam.matiere) + "-" + exam.date + ".pdf", doc.output("blob"));
+    if (out) out.replaceChildren(el("div", { class: "info" }, chs.length + (chs.length > 1 ? " fiches de la veille prêtes" : " fiche de la veille prête") + " pour « " + exam.intitule + " » (une page par chapitre)."));
+    else toast("Fiches de la veille prêtes");
+  } catch (e) {
+    const msg = e && e.code === "declined" ? "Téléchargement annulé." : e instanceof Error ? "Impossible de créer le PDF (" + e.message + ")." : sampleMsg(e);
+    if (out) out.replaceChildren(el("div", { class: "notice" }, msg)); else toast(msg);
+  } finally { ficheBusy = false; }
+}
+const ficheBtn = (exam, label) => el("button", { type: "button", onclick: () => { if (currentTab !== "examens") { showTab("examens"); } setTimeout(() => { const o = $("ficheOut"); if (o) o.scrollIntoView({ block: "center" }); }, 50); ficheVeille(exam); } }, label || "Fiches de la veille (PDF)");
+
+/* ---------- Mode audio des flashcards : lecture à voix haute, réponse à l'oral ---------- */
+const audio = { on: false, noMic: null };
+try { audio.on = localStorage.getItem("rev-audio") === "1"; } catch (e) {}
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+const canSpeak = () => typeof window.speechSynthesis !== "undefined" && typeof window.SpeechSynthesisUtterance !== "undefined";
+let recog = null;
+function speechText(card, side) {
+  let s = side === "recto" ? String(card.recto || "") : card.type === "trous" ? clozeParts(card.recto || "").map(p => p.hole !== undefined ? p.hole : p.t).join("") + (card.verso && normTxt(card.verso) !== normTxt(String(card.recto || "").replace(/\{\{|\}\}/g, "")) ? ". " + card.verso : "") : String(card.verso || "");
+  if (side === "recto") s = s.replace(/\{\{[\s\S]+?\}\}/g, " blanc ");
+  return s.replace(/≥/g, " supérieur ou égal à ").replace(/≤/g, " inférieur ou égal à ").replace(/≠/g, " différent de ").replace(/→|⇒/g, " donne ").replace(/∩/g, " inter ").replace(/∪/g, " union ")
+    .replace(/√/g, " racine de ").replace(/²/g, " au carré ").replace(/³/g, " au cube ").replace(/Δ/g, " delta ").replace(/∂/g, " d rond ").replace(/Σ/g, " somme ").replace(/×|·/g, " fois ")
+    .replace(/(\w)\s*\/\s*(\w)/g, "$1 sur $2").replace(/=/g, " égale ").replace(/\|/g, " sachant ").replace(/[*_#]/g, " ").replace(/\s+/g, " ").trim();
+}
+function speak(text, onend) {
+  if (!canSpeak() || !text) { if (onend) onend(); return; }
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text); u.lang = "fr-FR"; u.rate = 1;
+    const v = (speechSynthesis.getVoices() || []).find(x => /^fr/i.test(x.lang)); if (v) u.voice = v;
+    let done = false; const fin = () => { if (!done) { done = true; if (onend) onend(); } };
+    u.onend = fin; u.onerror = fin;
+    setTimeout(fin, Math.min(60000, 2500 + text.length * 90));
+    speechSynthesis.speak(u);
+  } catch (e) { if (onend) onend(); }
+}
+function stopAudio() { try { if (canSpeak()) speechSynthesis.cancel(); } catch (e) {} try { if (recog) recog.abort(); } catch (e) {} recog = null; }
+function listen(ms, cb) {
+  if (!SpeechRec || audio.noMic) { cb(null); return; }
+  let txt = "", done = false, to = null;
+  const fin = () => { if (done) return; done = true; clearTimeout(to); try { r.stop(); } catch (e) {} if (recog === r) recog = null; cb(txt.trim() || null); };
+  let r;
+  try {
+    r = new SpeechRec(); recog = r; r.lang = "fr-FR"; r.interimResults = true; r.maxAlternatives = 1; r.continuous = false;
+    r.onresult = ev => { txt = [...ev.results].map(x => x[0].transcript).join(" "); const h = $("audioHeard"); if (h) h.textContent = "Tu as dit : « " + txt + " »"; };
+    r.onerror = ev => { if (["not-allowed", "service-not-allowed", "network", "audio-capture"].includes(ev.error)) { audio.noMic = ev.error; toast("Micro indisponible ici : les cartes sont lues à voix haute, réponds à voix haute puis touche « Afficher »."); } fin(); };
+    r.onend = fin;
+    to = setTimeout(fin, ms);
+    r.start();
+  } catch (e) { audio.noMic = "x"; cb(null); }
+}
+const STOP_FR = new Set("le la les un une des de du d l et ou en au aux a est sont que qui quoi dans par pour sur avec ce cette ces se sa son ses il elle on ne pas plus c qu y".split(" "));
+const toks = s => normTxt(s).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 3 && !STOP_FR.has(w));
+function suggestRating(said, card) {
+  if (!said) return null;
+  if (/je (ne )?sais pas|aucune idee|j'?sais pas|passe/.test(normTxt(said))) return 0;
+  const exp = toks(card.type === "trous" ? clozeParts(card.recto || "").filter(p => p.hole !== undefined).map(p => p.hole).join(" ") : card.verso);
+  if (!exp.length) return null;
+  const got = new Set(toks(said).map(w => w.slice(0, 6)));
+  const hit = exp.filter(w => got.has(w.slice(0, 6))).length / exp.length;
+  return hit >= 0.6 ? 2 : hit >= 0.3 ? 1 : 0;
+}
+function ratingFromSpeech(said) {
+  const n = normTxt(said || "");
+  if (/difficile|dur\b/.test(n)) return 1;
+  if (/facile/.test(n)) return 3;
+  if (/rate|pas su|faux|loupe/.test(n)) return 0;
+  if (/bien|bon|juste|ok|correct/.test(n)) return 2;
+  return null;
+}
+function toggleAudio() {
+  audio.on = !audio.on;
+  try { localStorage.setItem("rev-audio", audio.on ? "1" : "0"); } catch (e) {}
+  if (!audio.on) stopAudio();
+  if (session) { session.audioIdx = null; session.audioVerso = null; }
+  renderSession();
+}
+function audioBar(card) {
+  if (!canSpeak()) return null;
+  return el("div", { class: "row audio-bar" },
+    el("span", { class: "actions", style: "justify-content:flex-start" },
+      el("button", { type: "button", class: audio.on ? "primary" : "", "aria-pressed": audio.on ? "true" : "false", onclick: toggleAudio }, audio.on ? "Mode audio : activé" : "Mode audio"),
+      audio.on ? el("button", { type: "button", class: "link", onclick: () => { stopAudio(); if (session) { session.audioIdx = null; session.audioVerso = null; } renderSession(); } }, "Réécouter") : null),
+    el("span", { class: "m", id: "audioHeard" }, audio.on ? (session && session.heard ? "Tu as dit : « " + session.heard + " »" : SpeechRec && !audio.noMic ? "Écoute la question puis réponds à voix haute ; dis ensuite « raté », « difficile », « bien » ou « facile »." : "Lecture à voix haute : réponds à voix haute, puis touche « Afficher la réponse ».") : ""));
+}
+function audioOnCard(s, card) {
+  if (!audio.on || !canSpeak()) return;
+  const idx = s.idx;
+  if (!s.shown && s.audioIdx !== idx) {
+    s.audioIdx = idx; s.heard = ""; s.audioSuggest = null;
+    setTimeout(() => speak(speechText(card, "recto"), () => {
+      if (session !== s || s.idx !== idx || s.shown || !audio.on) return;
+      listen(12000, said => {
+        if (session !== s || s.idx !== idx || s.shown || !audio.on) return;
+        if (!said) return;
+        s.heard = said; s.audioSuggest = suggestRating(said, card); s.shown = true; renderSession();
+      });
+    }), 150);
+  } else if (s.shown && s.audioVerso !== idx) {
+    s.audioVerso = idx;
+    stopAudio();
+    setTimeout(() => speak(speechText(card, "verso") + ". Raté, difficile, bien ou facile ?", () => {
+      if (session !== s || s.idx !== idx || !s.shown || !audio.on) return;
+      listen(7000, said => { if (session !== s || s.idx !== idx || !audio.on) return; const q = ratingFromSpeech(said); if (q !== null) rateCard(q); });
+    }), 150);
+  }
+}
+
+/* ---------- Mini-partiel mixte de la semaine (20 min, plusieurs chapitres et matières) ---------- */
+function miniDue() {
+  if (chapitres.length < 2) return false;
+  const t = today();
+  return !exercices.some(x => x.mixte && x.statut === "corrige" && x.corrigeLe && diff(t, x.corrigeLe) >= 0 && diff(t, x.corrigeLe) < 7);
+}
+function miniPick() {
+  const t = today();
+  const scored = chapitres.map(c => {
+    const ex = examFor(c), dte = ex ? diff(ex.date, t) : null, rc = chapRecall(c, ex ? ex.date : addDays(t, 14));
+    const last = (c.historiqueExos || []).slice(-1)[0], since = last ? diff(t, last.date) : 30;
+    const s = (5 - (c.niveau || 1)) + Math.min(since, 21) / 4 + (rc.p !== null ? (1 - rc.p) * 4 : 1) + (dte !== null && dte <= 21 ? 4 : 0) + Math.random() * 1.5;
+    return { c, s: s * matWeight(c.matiere) };
+  }).sort((a, b) => b.s - a.s);
+  const out = [], mats = new Set();
+  for (const x of scored) if (out.length < 4 && !mats.has(x.c.matiere)) { mats.add(x.c.matiere); out.push(x.c); }
+  for (const x of scored) if (out.length < 4 && !out.includes(x.c)) out.push(x.c);
+  return out;
+}
+let miniBusy = false;
+async function generateMini() {
+  if (miniBusy) return;
+  if (!sample || (typeof AI !== "undefined" && AI && AI.ready && !AI.ready())) return toast("L'IA n'est pas disponible : vérifie ta clé ou tes autorisations.");
+  const chs = miniPick();
+  if (chs.length < 2) return toast("Il faut au moins 2 chapitres pour un mini-partiel mixte.");
+  miniBusy = true;
+  showTab("exos");
+  const box = $("miniBox"); box.replaceChildren(el("div", { class: "panel" }, busy("Préparation du mini-partiel (" + chs.map(c => c.matiere).filter((v, i, a) => a.indexOf(v) === i).join(", ") + ")…")));
+  try {
+    const parts = [];
+    for (const c of chs) { const tx = (await getTexte(c.id)).slice(0, 7000); parts.push("### " + c.matiere + " · " + c.titre + " (niveau " + (c.niveau || 1) + "/5)" + (c.notions ? "\nNotions : " + c.notions : "") + ((c.pointsFaibles || []).length ? "\nPoints faibles : " + c.pointsFaibles.join(" ; ") : "") + (tx ? "\nExtrait du cours :\n" + tx : "")); }
+    const r = await sample.json([
+      "Tu crées un MINI-PARTIEL MIXTE de 20 minutes pour " + etu() + ". But : s'entraîner à reconnaître seul quel outil ou quelle méthode utiliser, comme dans un vrai partiel où les questions ne disent pas de quel chapitre elles viennent.",
+      "Chapitres à mélanger :\n" + parts.join("\n\n"),
+      "Consignes : 4 questions courtes (5 au plus), chacune sur un chapitre différent de la liste, dans un ordre mélangé (pas regroupées par matière) ; n'indique jamais le chapitre ni la matière dans l'énoncé ; mélange calcul court, question de cours et interprétation ; au moins une question cible un point faible ; faisable en 20 minutes au total sur papier ; données chiffrées cohérentes. Barème sur 10 réparti entre les questions. Formules en texte Unicode, sans LaTeX.",
+      "Réponds uniquement avec un objet JSON : {\"titre\": string court, \"enonce\": string (questions numérotées), \"methode\": string (pour chaque question : l'indice qui permettait de reconnaître l'outil), \"solution\": string (corrigé question par question, en indiquant pour chacune le chapitre concerné), \"bareme\": [{\"etape\": string (\"Question 1\"…), \"points\": number, \"chapitre\": string (titre exact de la liste)}]}"
+    ].join("\n\n"), { cache: false, modelTier: "complex" });
+    if (!r || !r.enonce || !r.solution) throw { code: "invalid_json" };
+    const id = today() + "-mini-" + rid();
+    const niv = Math.round(chs.reduce((a, c) => a + (c.niveau || 1), 0) / chs.length);
+    const doc = { mixte: true, chapId: chs[0].id, chapIds: chs.map(c => c.id), autreChapId: null, niveau: niv, titre: String(r.titre || "Mini-partiel mixte"), enonce: String(r.enonce), indice: "", methode: String(r.methode || ""), solution: String(r.solution), bareme: Array.isArray(r.bareme) ? r.bareme : [], creeLe: today(), debutLe: new Date().toISOString(), statut: "a_faire", duree: MINI_MIN };
+    await write(() => db.doc("exercices/" + id).set(doc));
+    curExo = Object.assign({ id }, doc); exoPhotos = []; exoSelf = false; exoShowHint = false; exoShowMethod = false;
+    renderCurrentExo(); renderMiniBox();
+    $("exCurSec").scrollIntoView({ block: "start" });
+  } catch (e) { box.replaceChildren(el("div", { class: "notice" }, sampleMsg(e))); }
+  finally { miniBusy = false; }
+}
+let miniClockT = null;
+function startMiniClock(x) {
+  clearInterval(miniClockT);
+  const tick = () => {
+    const c = $("miniClock");
+    if (!c || !curExo || curExo.id !== x.id || curExo.statut === "corrige") { clearInterval(miniClockT); miniClockT = null; return; }
+    const left = new Date(x.debutLe).getTime() + MINI_MIN * 60000 - Date.now();
+    c.textContent = left > 0 ? fmtClock(left).replace(/^0:/, "") : "Temps écoulé";
+    c.classList.toggle("over", left <= 0);
+  };
+  miniClockT = setInterval(tick, 1000); setTimeout(tick, 0);
+}
+async function applyMixte(x, note, r) {
+  const correction = { verdict: String(r.verdict || ""), etapes: Array.isArray(r.etapes) ? r.etapes.slice(0, 20) : [], conseil: String(r.conseil || ""), cartes: Array.isArray(r.cartes) ? r.cartes.slice(0, 4) : [] };
+  const per = (Array.isArray(r.parChapitre) ? r.parChapitre : []).filter(p => p && p.chapitre);
+  const dureeMin = x.debutLe ? Math.round((Date.now() - new Date(x.debutLe).getTime()) / 60000) : null;
+  await write(() => db.doc("exercices/" + x.id).update(Object.assign({ statut: "corrige", note, correction, corrigeLe: today(), parChapitre: per }, dureeMin && dureeMin >= 3 && dureeMin <= 120 ? { dureeMin } : {})));
+  for (const id of x.chapIds || [x.chapId]) {
+    const c = chapById(id); if (!c) continue;
+    const n0 = normTxt(c.titre);
+    const pc = per.find(p => normTxt(p.chapitre) === n0) || per.find(p => { const n = normTxt(p.chapitre); return n && (n0.includes(n) || n.includes(n0)); });
+    const n = pc && typeof pc.note === "number" ? Math.max(0, Math.min(10, pc.note)) : note;
+    const pf = Array.from(new Set(((pc && pc.pointsFaibles) || []).map(String).concat(c.pointsFaibles || []))).filter(Boolean).slice(0, 8);
+    const hist = (c.historiqueExos || []).concat([{ date: today(), note: n, niveau: c.niveau || 1, titre: "Mini-partiel mixte" }]).slice(-30);
+    await write(() => db.doc("chapitres/" + c.id).update({ pointsFaibles: pf, historiqueExos: hist }));
+  }
+  Object.assign(x, { statut: "corrige", note, correction, parChapitre: per });
+  exoSelf = false; exoPhotos = [];
+  renderCurrentExo(); renderMiniBox();
+  toast("Mini-partiel corrigé : " + note + "/10");
+}
+function renderMiniBox() {
+  const box = $("miniBox"); if (!box || !(loaded.c && loaded.x)) return;
+  if (miniBusy) return;
+  const t = today(), minis = exercices.filter(x => x.mixte).sort((a, b) => String(b.creeLe).localeCompare(String(a.creeLe)) || String(b.id).localeCompare(String(a.id)));
+  const open = minis.find(x => x.statut !== "corrige" && x.creeLe && diff(t, x.creeLe) < 7);
+  const last = minis.find(x => x.statut === "corrige");
+  const due = miniDue();
+  box.replaceChildren(el("div", { class: "panel" + (due ? " pomo-on" : "") },
+    el("div", { class: "row" }, el("div", {}, el("div", { class: "t" }, due ? "À faire cette semaine" : "Fait cette semaine ✓"),
+      el("div", { class: "m" }, due ? "20 min sur papier : 4 questions tirées de chapitres et de matières différents, mélangées comme dans un vrai partiel, pour t'entraîner à reconnaître seul le bon outil." : "Fait le " + pretty(last.corrigeLe) + " (" + last.note + "/10). Le prochain sera proposé dès le " + pretty(addDays(last.corrigeLe, 7)) + ".")),
+      el("span", { class: "actions" },
+        open ? el("button", { class: "primary", type: "button", onclick: () => { curExo = clone(open); exoPhotos = []; exoSelf = false; showTab("exos"); renderCurrentExo(); $("exCurSec").scrollIntoView({ block: "start" }); } }, "Reprendre") : null,
+        el("button", { class: open ? "" : due ? "primary" : "", type: "button", disabled: chapitres.length < 2 || null, onclick: generateMini }, open ? "Nouveau sujet" : due ? "Lancer le mini-partiel" : "En faire un autre"))),
+    minis.filter(x => x.statut === "corrige").length ? el("div", { class: "m" }, "Derniers : " + minis.filter(x => x.statut === "corrige").slice(0, 5).map(x => pretty(x.corrigeLe) + " " + x.note + "/10").join(" · ")) : null));
+}
+
+/* ---------- Cartes problématiques : ratées 3 fois ou plus → reformuler ou couper ---------- */
+let probState = { loading: false, props: null };
+const cardsProblem = () => cartes.filter(k => !k.suspendue && (k.lapses || 0) >= 3 && !(typeof k.problemeVu === "number" && (k.lapses || 0) < k.problemeVu + 2)).sort((a, b) => (b.lapses || 0) - (a.lapses || 0));
+async function analyseProblemes() {
+  if (!sample || (typeof AI !== "undefined" && AI && AI.ready && !AI.ready())) return toast("L'IA n'est pas disponible : vérifie ta clé ou tes autorisations.");
+  const list = cardsProblem().slice(0, 6); if (!list.length) return;
+  probState.loading = true; renderProblemes();
+  try {
+    const r = await sample.json([
+      "Tu améliores des flashcards qui posent problème à " + etu() + " : chacune a été ratée au moins 3 fois. Une carte souvent ratée est en général ambiguë, trop chargée (plusieurs idées), apprise par cœur sans être comprise, ou confondue avec une notion voisine.",
+      "Pour chaque carte : un diagnostic d'une phrase, puis une action : « reformuler » (1 carte plus claire : question précise, réponse courte) ou « couper » (2 ou 3 cartes, une idée chacune, dans l'ordre logique). « garder » seulement si la carte est déjà bonne : donne alors une astuce de mémorisation dans le diagnostic. Garde le sens exact du cours. Texte à trous possible (le mot à retrouver entre {{ }} dans le recto). Formules en texte Unicode, sans LaTeX.",
+      "Cartes :\n" + list.map(k => "- id " + k.id + " (" + (k.matiere || "") + " · " + (k.chapitre || "") + ", ratée " + k.lapses + " fois)\n  Recto : " + k.recto + "\n  Verso : " + (k.verso || "")).join("\n"),
+      "Réponds uniquement avec un objet JSON : {\"propositions\": [{\"id\": string, \"diagnostic\": string, \"action\": \"reformuler\"|\"couper\"|\"garder\", \"cartes\": [{\"type\": \"basique\"|\"trous\", \"recto\": string, \"verso\": string}]}]}"
+    ].join("\n\n"), { cache: false });
+    const props = (r && Array.isArray(r.propositions) ? r.propositions : []).filter(p => p && list.some(k => k.id === p.id));
+    if (!props.length) throw { code: "invalid_json" };
+    probState.props = props;
+  } catch (e) { toast(sampleMsg(e)); }
+  finally { probState.loading = false; renderProblemes(); }
+}
+async function applyProp(prop, ignore) {
+  const k = cartes.find(c => c.id === prop.id);
+  if (k) {
+    const cs = (prop.cartes || []).filter(x => x && x.recto).slice(0, 3);
+    if (ignore || prop.action === "garder" || !cs.length) await write(() => db.doc("cartes/" + k.id).update({ problemeVu: k.lapses || 0 }), ignore ? "Carte gardée telle quelle" : "Carte gardée");
+    else if (prop.action === "couper" && cs.length >= 2) {
+      for (const x of cs) await write(() => db.doc("cartes/" + k.chapId + "-" + rid()).set(Object.assign(newCardBase(k.chapId), aiCardData(x), { source: "decoupe", origine: k.id })));
+      await write(() => db.doc("cartes/" + k.id).update({ suspendue: true, remplaceeLe: today(), problemeVu: k.lapses || 0 }), "Carte coupée en " + cs.length + " (l'ancienne est suspendue)");
+    } else await write(() => db.doc("cartes/" + k.id).update(Object.assign(aiCardData(cs[0]), { ancienne: { recto: k.recto, verso: k.verso || "" }, reformuleeLe: today(), lapses: 0, reps: 0, ease: 2.5, interval: 0, due: today(), problemeVu: 0 })), "Carte reformulée : elle revient aujourd'hui");
+  }
+  if (probState.props) { probState.props = probState.props.filter(p => p !== prop); if (!probState.props.length) probState.props = null; }
+  renderProblemes();
+}
+function renderProblemes() {
+  const box = $("probBox"); if (!box || !loaded.k) return;
+  const list = cardsProblem();
+  $("probCount").textContent = list.length ? String(list.length) : "";
+  if (probState.loading) { box.replaceChildren(busy("Analyse des cartes problématiques…")); return; }
+  if (probState.props) {
+    box.replaceChildren(...probState.props.map(p => {
+      const k = cartes.find(c => c.id === p.id); if (!k) return null;
+      const cs = (p.cartes || []).filter(x => x && x.recto);
+      return el("div", { class: "cardrow" },
+        el("div", { class: "row" }, el("span", { class: "chip late" }, "ratée " + k.lapses + "×"), el("span", { class: "chip" }, p.action === "couper" ? "à couper en " + cs.length : p.action === "garder" ? "à garder" : "à reformuler")),
+        el("div", { class: "rv" }, k.recto), el("div", { class: "vs" }, k.verso || ""),
+        el("div", { class: "info" }, p.diagnostic || ""),
+        cs.length && p.action !== "garder" ? el("div", { class: "list" }, cs.map(x => el("div", { class: "panel", style: "padding:10px 12px;gap:4px" }, el("div", { class: "rv" }, renderFace(aiCardData(x), "verso")), aiCardData(x).type !== "trous" ? el("div", { class: "m" }, "Question : " + x.recto) : null))) : null,
+        el("div", { class: "actions", style: "justify-content:flex-start" },
+          p.action !== "garder" && cs.length ? el("button", { class: "primary", type: "button", onclick: () => applyProp(p) }, p.action === "couper" && cs.length >= 2 ? "Remplacer par ces " + cs.length + " cartes" : "Remplacer la carte") : null,
+          el("button", { type: "button", onclick: () => applyProp(p, true) }, "Garder telle quelle")));
+    }).filter(Boolean), el("div", { class: "row" }, el("span", {}), el("button", { class: "link", type: "button", onclick: () => { probState.props = null; renderProblemes(); } }, "Fermer les propositions")));
+    return;
+  }
+  if (!list.length) { box.replaceChildren(el("div", { class: "empty" }, "Aucune carte ratée 3 fois ou plus. Quand une carte bloque, elle arrive ici : elle est souvent mal formulée ou trop chargée, et l'IA peut la reformuler ou la couper en deux.")); return; }
+  box.replaceChildren(
+    el("div", { class: "row" }, el("span", { class: "hint", style: "flex:1;min-width:200px" }, "Une carte ratée 3 fois ou plus est souvent mal formulée ou trop chargée. L'IA propose de la reformuler ou de la couper ; tu choisis."),
+      el("button", { class: "primary", type: "button", onclick: analyseProblemes }, "Proposer des améliorations" + (list.length > 6 ? " (6 premières)" : ""))),
+    ...list.slice(0, 6).map(k => el("div", { class: "cardrow" }, el("div", { class: "row" }, el("span", { class: "m" }, (k.matiere || "") + " · " + (k.chapitre || "")), el("span", { class: "chip late" }, "ratée " + k.lapses + "×")), el("div", { class: "rv" }, k.recto), el("div", { class: "vs" }, k.verso || ""))));
+}
+
+/* ---------- Emploi du temps (.ics de l'ENT) ---------- */
+let edt = null, edtDayCache = null, edtTimer = null, edtAddBusy = false;
+function parseIcs(text) {
+  const lines = String(text).replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
+  const evs = []; let cur = null;
+  for (const ln of lines) {
+    if (/^BEGIN:VEVENT/i.test(ln)) cur = {};
+    else if (/^END:VEVENT/i.test(ln)) { if (cur) evs.push(cur); cur = null; }
+    else if (cur) {
+      const i = ln.indexOf(":"); if (i < 0) continue;
+      const [name, ...params] = ln.slice(0, i).split(";"), P = {};
+      for (const p of params) { const j = p.indexOf("="); if (j > 0) P[p.slice(0, j).toUpperCase()] = p.slice(j + 1).replace(/^"|"$/g, ""); }
+      const N = name.toUpperCase(), val = ln.slice(i + 1);
+      if (N === "EXDATE") (cur.EXDATE = cur.EXDATE || []).push(...val.split(",").map(v => ({ v, P })));
+      else cur[N] = { v: val, P };
+    }
+  }
+  return evs;
+}
+const icsText = o => String((o && o.v) || "").replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\").replace(/\s+/g, " ").trim();
+function tzOffsetMin(tz, date) {
+  try {
+    const f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const p = Object.fromEntries(f.formatToParts(date).map(x => [x.type, x.value]));
+    return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - date.getTime()) / 60000;
+  } catch (e) { return null; }
+}
+function icsDate(o) {
+  if (!o) return null;
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/.exec(String(o.v).trim()); if (!m) return null;
+  const [y, mo, d, h, mi, s] = [+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)];
+  if (!m[4]) return { date: new Date(y, mo, d), allDay: true };
+  if (m[7]) return { date: new Date(Date.UTC(y, mo, d, h, mi, s)), allDay: false };
+  const tz = o.P && o.P.TZID;
+  if (tz) { const guess = new Date(Date.UTC(y, mo, d, h, mi, s)), off = tzOffsetMin(tz, guess); if (off !== null) return { date: new Date(guess.getTime() - off * 60000), allDay: false }; }
+  return { date: new Date(y, mo, d, h, mi, s), allDay: false };
+}
+function icsDuration(v) { const m = /P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/.exec(String(v || "")); return m ? ((+(m[1] || 0)) * 1440 + (+(m[2] || 0)) * 60 + (+(m[3] || 0))) * 60000 : 3600000; }
+const hmOf = d => pad(d.getHours()) + ":" + pad(d.getMinutes());
+function expandEvent(ev, from, to) {
+  const st = icsDate(ev.DTSTART); if (!st || st.allDay) return [];
+  if (ev.STATUS && /CANCEL/i.test(ev.STATUS.v)) return [];
+  const en = icsDate(ev.DTEND), dur = en && !en.allDay ? Math.max(15 * 60000, en.date - st.date) : icsDuration(ev.DURATION && ev.DURATION.v);
+  const s = icsText(ev.SUMMARY).slice(0, 90) || "Cours", lieu = icsText(ev.LOCATION).slice(0, 50);
+  const ex = new Set((ev.EXDATE || []).map(x => { const d = icsDate(x); return d ? iso(d.date) + (d.allDay ? "" : " " + hmOf(d.date)) : ""; }));
+  const out = [];
+  const push = start => { const d = iso(start); if (d < from || d > to || ex.has(d + " " + hmOf(start)) || ex.has(d)) return; out.push({ k: normTxt(s).replace(/\s+/g, " ").slice(0, 80), s, lieu, d, h1: hmOf(start), h2: hmOf(new Date(start.getTime() + dur)) }); };
+  if (!ev.RRULE) { push(st.date); return out; }
+  const R = Object.fromEntries(String(ev.RRULE.v).split(";").map(x => x.split("=")).map(([a, b]) => [String(a).toUpperCase(), b]));
+  const freq = R.FREQ, step = Math.max(1, +(R.INTERVAL || 1)), count = R.COUNT ? +R.COUNT : Infinity;
+  const until = R.UNTIL ? (icsDate({ v: R.UNTIL, P: {} }) || {}).date : null;
+  const days = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+  const byday = R.BYDAY ? R.BYDAY.split(",").map(x => days.indexOf(x.replace(/^[+-]?\d+/, ""))).filter(x => x >= 0) : [st.date.getDay()];
+  let n = 0;
+  const base = st.date, H = base.getHours(), Mi = base.getMinutes();
+  const occ = d => { const o = new Date(d.getFullYear(), d.getMonth(), d.getDate(), H, Mi); if (o < base || (until && o > until) || n >= count) return false; n++; push(o); return true; };
+  if (freq === "DAILY") for (let k = 0; k < 800; k++) { const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + k * step); if ((until && d > until) || n >= count || iso(d) > to) break; occ(d); }
+  else if (freq === "WEEKLY") {
+    const w0 = new Date(base.getFullYear(), base.getMonth(), base.getDate() - base.getDay());
+    for (let w = 0; w < 300; w++) {
+      const ws = new Date(w0.getFullYear(), w0.getMonth(), w0.getDate() + w * 7 * step);
+      if ((until && ws > until) || n >= count || iso(ws) > to) break;
+      for (const wd of byday.slice().sort()) occ(new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + wd));
+    }
+  } else push(base);
+  return out;
+}
+const EDT_STOP = new Set("cours td tp cm tdtp amphi salle groupe grp gr examen partiel controle continu seance module ue ec option bat batiment campus distanciel presentiel".split(" "));
+function guessMatiere(s) {
+  const cands = [...new Set(DEFAULT_MATIERES.concat(chapitres.map(c => c.matiere), examens.map(e => e.matiere)))].filter(Boolean);
+  const words = normTxt(s).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 4 && !EDT_STOP.has(w));
+  let best = "", bestScore = 0;
+  for (const m of cands) {
+    const mw = normTxt(m).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 4);
+    let sc = 0;
+    for (const a of mw) for (const b of words) { if (a === b) sc += 3; else if (a.startsWith(b) || b.startsWith(a.slice(0, 6))) sc += 2; }
+    if (sc > bestScore) { bestScore = sc; best = m; }
+  }
+  return best;
+}
+function edtDays() {
+  if (edtDayCache) return edtDayCache;
+  const m = new Map(), map = (edt && edt.map) || {}, byDay = new Map();
+  for (const e of (edt && edt.events) || []) { if (map[e.k] === "_ignore") continue; if (!byDay.has(e.d)) byDay.set(e.d, []); byDay.get(e.d).push([e.h1, e.h2]); }
+  const toM = h => { const [a, b] = h.split(":").map(Number); return a * 60 + b; };
+  for (const [d, arr] of byDay) {
+    const iv = arr.map(([a, b]) => [toM(a), Math.max(toM(a), toM(b))]).sort((x, y) => x[0] - y[0]);
+    let tot = 0, cs = -1, ce = -1;
+    for (const [a, b] of iv) { if (a > ce) { if (ce > cs) tot += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); }
+    if (ce > cs) tot += ce - cs;
+    m.set(d, tot);
+  }
+  edtDayCache = m;
+  return m;
+}
+const edtDayMin = d => edtDays().get(d) || 0;
+// Jours chargés : moins de 3 h de cours = temps normal ; 3 à 5 h : 85 % ; 5 à 7 h : 70 % ; 7 h et plus : 55 %. Un jour réglé à la main n'est pas touché.
+function edtFactor(d) {
+  if (!edt || edt.reduire === false) return 1;
+  const ex = (reglages && reglages.exceptions) || {};
+  if (ex[d] !== undefined && ex[d] !== null) return 1;
+  const h = edtDayMin(d) / 60;
+  return h < 3 ? 1 : h < 5 ? 0.85 : h < 7 ? 0.7 : 0.55;
+}
+async function importIcs(file) {
+  const out = $("edtOut");
+  try {
+    const raw = parseIcs(await file.text());
+    if (!raw.length) throw new Error("aucun cours trouvé dans ce fichier (est-ce bien un .ics ?)");
+    const t = today(), from = addDays(t, -35), to = addDays(t, 150);
+    let events = [];
+    for (const ev of raw) events.push(...expandEvent(ev, from, to));
+    const seen = new Set(); events = events.filter(e => { const k = e.d + e.h1 + e.k; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1)).slice(0, 1500);
+    if (!events.length) throw new Error("aucun cours entre le " + pretty(from) + " et le " + pretty(to));
+    const prev = edt || {}, map = Object.assign({}, prev.map || {});
+    for (const e of events) if (!(e.k in map)) map[e.k] = guessMatiere(e.s);
+    edt = { importeLe: t, depuis: prev.depuis || t, fichier: String(file.name || "").slice(0, 80), events, map, auto: prev.auto !== false, reduire: prev.reduire !== false, ajoutes: prev.ajoutes || [] };
+    edtDayCache = null;
+    await write(() => db.doc("plan/edt").set(clone(edt)), events.length + " créneaux importés");
+    if (out) out.replaceChildren(el("div", { class: "info" }, events.length + " créneaux importés (" + new Set(events.map(e => e.k)).size + " cours différents). Vérifie ci-dessous la matière de chaque cours."));
+    renderAll();
+  } catch (e) { if (out) out.replaceChildren(el("div", { class: "notice" }, "Import impossible : " + ((e && e.message) || "fichier illisible"))); }
+}
+function saveEdt(patch, msg) {
+  edt = Object.assign({}, edt || {}, patch); edtDayCache = null;
+  renderAll();
+  write(() => db.doc("plan/edt").set(clone(edt)), msg);
+}
+async function edtAutoAdd(manualFrom) {
+  if (!edt || edtAddBusy || !db || !loaded.c) return;
+  if (!manualFrom && edt.auto === false) return;
+  const t = today(), now = new Date(), hm = hmOf(now), from = manualFrom || edt.depuis || t;
+  const done = new Set(edt.ajoutes || []), todo = new Map();
+  for (const e of edt.events || []) {
+    const m = edt.map && edt.map[e.k]; if (!m || m === "_ignore") continue;
+    if (e.d < from || e.d > t || (e.d === t && e.h2 > hm)) continue;
+    const key = e.d + "|" + slug(m); if (done.has(key)) continue;
+    if (!todo.has(key)) todo.set(key, { d: e.d, m, s: [] }); todo.get(key).s.push(e.s);
+  }
+  if (!todo.size) return 0;
+  edtAddBusy = true;
+  let n = 0;
+  try {
+    for (const [key, x] of todo) {
+      done.add(key);
+      if (chapitres.some(c => c.matiere === x.m && c.dateVu === x.d)) continue;
+      const titre = "Cours du " + pretty(x.d) + " (" + [...new Set(x.s)].slice(0, 2).join(" + ").slice(0, 70) + ")";
+      const id = x.d + "-" + slug(x.m + " edt");
+      if (chapById(id)) continue;
+      const debut = x.d < t ? lightestStart(t) : x.d;
+      const doc = newChapterDoc(x.m, titre, x.d, "", "edt", debut);
+      if (await write(() => db.doc("chapitres/" + id).set(doc))) { chapitres.push(Object.assign({ id }, doc)); n++; }
+    }
+    edt.ajoutes = [...done].slice(-500);
+    await write(() => db.doc("plan/edt").update({ ajoutes: edt.ajoutes }));
+    if (n) toast(n + " cours ajouté" + (n > 1 ? "s" : "") + " depuis ton emploi du temps : importe tes notes dans l'onglet Cours");
+  } finally { edtAddBusy = false; }
+  return n;
+}
+function renderEdt() {
+  const box = $("edtBox"); if (!box || !loaded.c) return;
+  if (box.contains(document.activeElement) && document.activeElement.tagName === "SELECT") return;
+  const fileIn = el("input", { type: "file", accept: ".ics,text/calendar", id: "edtFile", "aria-label": "Fichier .ics" });
+  fileIn.addEventListener("change", ev => { const f = ev.target.files[0]; if (f) importIcs(f); });
+  const head = [el("div", { class: "hint" }, "Sur l'ENT, ouvre ton emploi du temps et cherche « Exporter », « iCal » ou « .ics » ; télécharge le fichier puis importe-le ici (réimporte-le quand l'emploi du temps change). Les cours vus s'ajoutent tout seuls le soir même avec leurs 5 révisions, et les jours chargés reçoivent moins de temps de révision."),
+    el("label", {}, edt ? "Réimporter le fichier .ics" : "Fichier .ics de ton emploi du temps", fileIn), el("div", { id: "edtOut" })];
+  if (!edt) { box.replaceChildren(...head); return; }
+  const t = today(), ev = edt.events || [], map = edt.map || {};
+  const keys = new Map(); for (const e of ev) { if (!keys.has(e.k)) keys.set(e.k, { s: e.s, n: 0, next: null }); const x = keys.get(e.k); x.n++; if (e.d >= t && !x.next) x.next = e.d; }
+  const mats = [...new Set(DEFAULT_MATIERES.concat(chapitres.map(c => c.matiere), examens.map(e => e.matiere), Object.values(map).filter(v => v && v !== "_ignore")))].sort();
+  const rows = [...keys.entries()].sort((a, b) => (map[a[0]] ? 1 : 0) - (map[b[0]] ? 1 : 0) || b[1].n - a[1].n).map(([k, x]) => {
+    const sel = el("select", { "aria-label": "Matière de " + x.s }, el("option", { value: "" }, "À classer"), el("option", { value: "_ignore" }, "Ignorer (pas un cours à réviser)"), mats.map(m => el("option", { value: m }, m)));
+    sel.value = map[k] || "";
+    sel.addEventListener("change", () => saveEdt({ map: Object.assign({}, map, { [k]: sel.value }) }, "Classé : " + (sel.value === "_ignore" ? "ignoré" : sel.value || "à classer")));
+    return el("div", { class: "edt-row" + (map[k] ? "" : " todo") }, el("div", {}, el("div", { class: "t" }, x.s), el("div", { class: "m" }, x.n + " créneau" + (x.n > 1 ? "x" : "") + (x.next ? " · prochain " + pretty(x.next) : ""))), sel);
+  });
+  const week = [...Array(7)].map((_, i) => addDays(t, i)).map(d => ({ d, min: edtDayMin(d), f: edtFactor(d) }));
+  const toClass = [...keys.keys()].filter(k => !map[k]).length;
+  const tg = (k, label) => { const cb = el("input", { type: "checkbox" }); cb.checked = edt[k] !== false; cb.addEventListener("change", () => saveEdt({ [k]: cb.checked }, label + (cb.checked ? " : activé" : " : désactivé"))); return el("label", { class: "inline" }, cb, label); };
+  const pastN = (() => { const s = new Set(); for (const e of ev) { const m = map[e.k]; if (m && m !== "_ignore" && e.d >= addDays(t, -7) && e.d < (edt.depuis || t) && !(edt.ajoutes || []).includes(e.d + "|" + slug(m))) s.add(e.d + "|" + m); } return s.size; })();
+  box.replaceChildren(...[...head,
+    el("div", { class: "m" }, ev.length + " créneaux du " + pretty(ev[0] && ev[0].d) + " au " + pretty(ev[ev.length - 1] && ev[ev.length - 1].d) + " · importé le " + pretty(edt.importeLe) + (edt.fichier ? " (" + edt.fichier + ")" : "")),
+    toClass ? el("div", { class: "notice" }, toClass + " cours à classer : choisis leur matière pour qu'ils s'ajoutent tout seuls (ou « Ignorer »).") : null,
+    tg("auto", "Ajouter automatiquement les cours vus"), tg("reduire", "Moins de temps de révision les jours chargés"),
+    el("div", { class: "edt-week" }, week.map(x => el("div", { class: "edt-day" + (x.f < 1 ? " busy" : "") }, el("b", {}, pretty(x.d)), el("span", {}, x.min ? fmtMin(x.min) + " de cours" : "pas de cours"), el("span", { class: "m" }, budgetJour(x.d) ? "révisions " + fmtMin(budgetJour(x.d)) + (x.f < 1 ? " (réduit)" : "") : "jour off")))),
+    pastN ? el("div", { class: "row" }, el("span", { class: "hint" }, pastN + " cours des 7 derniers jours ne sont pas encore dans tes chapitres."), el("button", { type: "button", onclick: async () => { const n = await edtAutoAdd(addDays(t, -7)); if (!n) toast("Rien à ajouter"); renderEdt(); } }, "Les ajouter")) : null,
+    el("details", { class: "more", open: toClass ? true : null }, el("summary", {}, "Matière de chaque cours (" + keys.size + ")"), el("div", { class: "list", style: "margin-top:8px" }, rows)),
+    el("div", { class: "row" }, el("span", {}), el("button", { class: "link", type: "button", onclick: () => { edt = null; edtDayCache = null; write(() => db.doc("plan/edt").delete(), "Emploi du temps retiré"); renderAll(); } }, "Retirer l'emploi du temps"))].filter(Boolean));
+}
+
+/* ---------- Aperçu pour les rappels : + questions du jour, objectifs ---------- */
+function snapshotPlan() {
+  if (!(loaded.c && loaded.e && loaded.k)) return;
+  clearTimeout(planSnapTimer);
+  planSnapTimer = setTimeout(async () => {
+    const plan = computePlan(), t = today(), jours = {};
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(t, i), tasks = plan.get(d) || [];
+      if (tasks.length) jours[d] = tasks.map(x => x.kind === "blanc" ? { type: "examen blanc", matiere: x.exam.matiere, examen: x.exam.intitule, cle: x.key } : { type: "chapitre", matiere: x.chap.matiere, titre: x.chap.titre, tour: x.tour + "/" + x.tours, examen: x.exam.intitule, cle: x.key });
+    }
+    const sch = calSchedule(), memo = {}, temps = {};
+    for (const c of chapitres) (c.etapes || []).forEach((x, i) => { const d = sch.get(c.id + "|" + i); if (d && d <= addDays(t, 6)) (memo[d] = memo[d] || []).push({ matiere: c.matiere, titre: c.titre, etape: x.code, prevue: x.due }); });
+    for (let i = 0; i < 7; i++) { const d = addDays(t, i); temps[d] = budgetJour(d); }
+    let questions = null;
+    try { const bp = briefPlan([]); questions = { nombre: bp.total, minutes: Math.round(bp.total * Q_MIN), programme: bp.prog, chapitres: bp.rows.map(r => ({ matiere: r.c.matiere, titre: r.c.titre, nombre: r.slots, types: r.qtypes, raisons: r.raisons })) }; } catch (e) {}
+    const objectifs = Object.entries(notesVisees()).map(([m, v]) => ({ matiere: m, visee: v, estimee: matEstimate(m), poids: Math.round(matWeight(m) * 100) / 100 }));
+    const body = { jours, memo, temps, questions, objectifs, miniPartiel: miniDue() };
+    const json = JSON.stringify(body);
+    if (json === lastPlanSnap) return;
+    if (lastPlanSnap === null) { try { const s = await db.doc("plan/apercu").get(); if (s.exists && s.data().majLe === t) { const { majLe, ...rest } = s.data(); if (JSON.stringify(Object.assign({ jours: {}, memo: {}, temps: {}, questions: null, objectifs: [], miniPartiel: false }, rest)) === JSON.stringify(Object.assign({ jours: {}, memo: {}, temps: {}, questions: null, objectifs: [], miniPartiel: false }, body))) { lastPlanSnap = json; return; } } } catch (e) {} }
+    lastPlanSnap = json;
+    await write(() => db.doc("plan/apercu").set(Object.assign({ majLe: t }, body)));
+  }, 2500);
+}
+
+function renderNouv4() {
+  renderMemoBar(); renderMiniBox(); renderProblemes(); renderObjectifs(); renderEdt();
+  clearTimeout(edtTimer); edtTimer = setTimeout(() => edtAutoAdd(), 3000);
+}
+function setupNouv4() {}
+function subscribeNouv4() {
+  db.doc("plan/edt").onSnapshot(s => { const d = s.exists ? s.data() : null; if (JSON.stringify(d) !== JSON.stringify(edt)) { edt = d; edtDayCache = null; renderAll(); } }, () => {});
+  setInterval(() => edtAutoAdd(), 10 * 60000);
+}
+
 /* ================= Rendu global & navigation ================= */
 function renderMatieres() {
   const set = new Set(DEFAULT_MATIERES);
@@ -3151,7 +4176,7 @@ function renderSelects() {
 function renderAll() {
   renderBudget(); renderGreeting(); renderToday(); renderStats(); renderSuggest(); renderBrief(); renderStreak(); renderProgress(); renderUpcoming();
   if (!session) renderSession();
-  renderCardList(); renderLevels(); renderExHist(); renderChapters(); renderExams(); renderMatieres(); renderSelects(); renderExtras(); if (!$("atelierBox").contains(document.activeElement)) renderAtelier(); renderAtelierHist(); renderPomo(); snapshotPlan(); renderBilan();
+  renderCardList(); renderLevels(); renderExHist(); renderChapters(); renderExams(); renderMatieres(); renderSelects(); renderExtras(); if (!$("atelierBox").contains(document.activeElement)) renderAtelier(); renderAtelierHist(); renderPomo(); snapshotPlan(); renderBilan(); renderNouv4();
 }
 function showTab(name) {
   currentTab = name;
@@ -3458,7 +4483,7 @@ async function generateBrief() {
     const t = today();
     const recentQs = await recentBriefQuestions(3);
     const plan = briefPlan(recentQs);
-    if (!plan.rows.length) { toast("Ajoute d'abord un chapitre."); renderBrief(); return; }
+    if (!plan.rows.length) { toast(chapitres.length ? "Jour off : pas de questions aujourd'hui." : "Ajoute d'abord un chapitre."); renderBrief(); return; }
     const prompt = briefPrompt(plan, recentQs);
     const r = await AI.json(prompt);
     if (!r || !Array.isArray(r.questions)) throw { code: "invalid_json" };
@@ -3685,7 +4710,7 @@ async function enterAppInner(u) {
 }
 function startApp() {
   sample = AI; imgLimits = AI.limits();
-  setupUI(); setupSettings(); setupExtras(); setupExtras2(); setupExtras3(); renderMatieres(); renderGreeting();
+  setupUI(); setupSettings(); setupExtras(); setupExtras2(); setupExtras3(); setupNouv4(); renderMatieres(); renderGreeting();
   $("pomoPill").addEventListener("click", () => showTab("jour"));
   if (!profile.prenom || !AI.ready()) showTab("reglages");
   const onErr = e => { $("dbNotice").hidden = false; $("dbNotice").textContent = "Problème de connexion à la base" + (e && e.message ? " : " + e.message : "") + "."; };
@@ -3694,7 +4719,7 @@ function startApp() {
   db.collection("cartes").onSnapshot(s => { cartes = s.docs.map(d => Object.assign({ id: d.id }, d.data())); loaded.k = true; renderAll(); }, onErr);
   db.collection("exercices").onSnapshot(s => { exercices = s.docs.map(d => Object.assign({ id: d.id }, d.data())); loaded.x = true; renderExHist(); renderStreak(); renderBudget(); }, onErr);
   db.doc("briefs/" + today()).onSnapshot(s => { brief = s.exists ? s.data() : null; renderBrief(); }, () => {});
-  subscribeExtras(); subscribeExtras2(); subscribeExtras3();
+  subscribeExtras(); subscribeExtras2(); subscribeExtras3(); subscribeNouv4();
   db.collection("stats").onSnapshot(s => {
     statsAll = s.docs.map(d => Object.assign({ id: d.id }, d.data()));
     const td = statsAll.find(x => x.id === today()); statsJour = td ? (({ id, ...r }) => r)(td) : null;
