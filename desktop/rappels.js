@@ -21,8 +21,10 @@ function budgetFor(rows, date) {
   const ex = r.exceptions || {}, sem = Array.isArray(r.semaine) ? r.semaine : [];
   const [y, m, d] = date.split("-").map(Number), wd = new Date(y, m - 1, d).getDay();
   const v = ex[date] !== undefined && ex[date] !== null ? ex[date] : sem[wd] !== undefined && sem[wd] !== null && sem[wd] !== "" ? sem[wd] : r.minutesJour;
-  const n = Number(v);
-  return !isFinite(n) ? 90 : n <= 0 ? 0 : Math.max(15, Math.min(600, n));
+  let n = Number(v);
+  if (!isFinite(n)) n = 90;
+  if (n > 0) { let x = 0; for (const k of Object.values(r.renforts || {})) if (k && date >= (k.depuis || "") && date <= k.jusqu) x += Number(k.extra) || 0; if (x) n = Math.min(n + x, Math.max(n, 240)); }
+  return n <= 0 ? 0 : Math.max(15, Math.min(600, n));
 }
 // Rythme réel des flashcards sur 14 jours (secondes par carte mesurées, part de cartes ratées), comme sur la page.
 function cardPace(rows, date) {
