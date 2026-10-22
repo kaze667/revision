@@ -313,6 +313,8 @@ details.more > summary { padding: 4px 2px; }
 /* Nouveautés 4 */
 .memo-bar { position: sticky; top: 62px; z-index: 4; }
 #memoBar[hidden] { display: none; }
+#v-jour.veille-only > :not(#veilleSec) { display: none; }
+#veilleSec[hidden] { display: none; }
 .memo-mat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .memo-mat button { margin-left: auto; padding: 5px 12px; font-size: 13px; }
 .rate button.sugg { outline: 2px solid var(--amber); outline-offset: 2px; }
@@ -381,6 +383,7 @@ details.more > summary { padding: 4px 2px; }
   <!-- ============ AUJOURD'HUI ============ -->
   <div class="view" id="v-jour">
     <div class="stats" id="statsBox"></div>
+    <section id="veilleSec" hidden><div id="veilleBox"></div></section>
     <section id="budgetSec">
       <h2>Ton temps aujourd'hui <span class="count" id="budgetCount"></span></h2>
       <div id="guideBox"></div>
@@ -521,6 +524,11 @@ details.more > summary { padding: 4px 2px; }
   <!-- ============ ATELIER ============ -->
   <div class="view" id="v-atelier" hidden>
     <section>
+      <h2>Erreurs qui reviennent <span class="count" id="errCount"></span></h2>
+      <div class="hint">La même confusion repérée dans plusieurs chapitres (points faibles des exercices, examens blancs, ateliers, cartes très ratées) : un atelier ciblé la travaille d'un coup, avec des questions qui relient les chapitres.</div>
+      <div class="list" id="errBox"></div>
+    </section>
+    <section>
       <h2>Atelier de compréhension</h2>
       <div class="hint">Produire soi-même, de mémoire, puis comparer : c'est ce qui construit des schémas mentaux solides. Chaque activité est vérifiée par l'IA et alimente tes points faibles et tes flashcards.</div>
       <div id="atelierBox"></div>
@@ -611,6 +619,7 @@ details.more > summary { padding: 4px 2px; }
       <div class="hint">Ta note visée répartit ton temps entre les matières : plus l'écart avec ton niveau estimé est grand, plus la matière reçoit de flashcards, de tours de préparation et de questions du jour. Les pourcentages estiment ce que tu retiendras de chaque chapitre le jour de l'examen, d'après tes cartes (en supposant que tu fais les révisions prévues) ; les chapitres les plus faibles passent en premier dans la préparation.</div>
       <div id="ficheOut"></div>
       <div id="objBox" style="display:grid;gap:12px"></div>
+      <div id="courbeBox" style="display:grid;gap:10px"></div>
     </section>
     <section id="blancSec">
       <h2>Examen blanc</h2>
@@ -1221,6 +1230,7 @@ function alertNodes() {
 
 /* ---- Réglages : enregistrement commun ---- */
 function saveReglages(patch, msg) {
+  reglagesLocalT = Date.now();
   reglages = Object.assign({}, reglages, patch);
   if (reglages.exceptions) { const t = today(), ex = {}; for (const [d, v] of Object.entries(reglages.exceptions)) if (d >= addDays(t, -1) && v !== null && v !== undefined && v !== "") ex[d] = Number(v); reglages.exceptions = ex; }
   renderAll();
@@ -1345,6 +1355,7 @@ function renderBudget() {
   const p = dayProgram(), B = p.B;
   const inp = el("input", { type: "number", id: "budgetIn", min: "15", max: "600", step: "5", value: String(Number(reglages.minutesJour) || 90), "aria-label": "Minutes de révision par jour (temps général)" });
   inp.addEventListener("change", () => setBudget(inp.value));
+  inp.addEventListener("input", () => { clearTimeout(inp._t); inp._t = setTimeout(() => { const v = Number(inp.value); if (v >= 15 && v <= 600 && v !== Number(reglages.minutesJour)) setBudget(v); }, 900); });
   const SEG = [["examen", "Examens du jour", "var(--exam)"], ["cartes", "Flashcards à revoir", "var(--amber)"], ["memo", "Mémorisation des cours", "#7fd1c7"], ["prepa", "Préparation des examens", "#b9a3f5"], ["nouvelles", "Nouvelles cartes", "#f59ac0"], ["questions", "Questions du jour", "#e6c06a"], ["mini", "Mini-partiel", "#9fd38a"], ["exo", "Exercice libre", "#8fb8ff"]].filter(([k]) => p.parts[k] >= 0.5);
   const total = p.spent + p.total, scale = Math.max(B, total, 1);
   const bar = el("div", { class: "budget-bar", role: "img", "aria-label": "Fait " + fmtMin(p.spent) + ", prévu " + fmtMin(p.total) + " sur " + fmtMin(B) },
@@ -1368,6 +1379,7 @@ function renderBudget() {
       el("span", { class: "budget-chips" }, [30, 45, 60, 90, 120, 180].map(m => el("button", { type: "button", class: m === Number(reglages.minutesJour || 90) ? "primary" : "", onclick: () => setBudget(m) }, fmtMin(m))))),
     wrap, legend,
     el("div", { class: p.deferred || nCal ? "info" : "m" }, msg.join(" ")),
+    budgetSourceNote(),
     budgetDaysPanel(),
     el("div", { class: "hint" }, "Durées calculées avec ton rythme réel : " + Math.round(cardSeconds()) + " s par carte, " + Math.round(failRate() * 100) + " % de cartes ratées qui reviennent, exercice ≈ " + fmtMin(exoMin()) + (cal.n >= 3 ? ", révisions de cours ×" + cal.f.toFixed(2).replace(".", ",") + " d'après ton chrono 25/5" : " (les révisions de cours s'ajusteront dès 3 jours de chrono 25/5)") + ". Nouvelles cartes : " + p.nNew + " aujourd'hui (au plus " + p.durable + " par jour pour que les révisions des semaines suivantes tiennent dans ton temps). Tout se recalcule dès que tu changes ton temps.")));
   renderGuide();
@@ -2784,7 +2796,7 @@ function setupExtras() {
 function subscribeExtras() {
   db.collection("blancs").onSnapshot(s => { blancs = s.docs.map(d => Object.assign({ id: d.id }, d.data())); renderBlancs(); }, () => {});
   db.doc("plan/" + today()).onSnapshot(s => { planJour = s.exists ? s.data() : null; renderPlan(); renderToday(); renderBudget(); renderSuggest(); }, () => {});
-  db.doc("plan/reglages").onSnapshot(s => { if (s.exists) { const d = s.data() || {}, cur = JSON.stringify({ m: reglages.minutesJour, s: reglages.semaine || null, e: reglages.exceptions || {}, n: reglages.notesVisees || {} }); if (JSON.stringify({ m: d.minutesJour, s: d.semaine || null, e: d.exceptions || {}, n: d.notesVisees || {} }) !== cur) { reglages = Object.assign({ minutesJour: 90 }, d); renderAll(); } } }, () => {});
+  db.doc("plan/reglages").onSnapshot(s => { if (s.exists && Date.now() - reglagesLocalT > 4000) { const d = s.data() || {}, cur = JSON.stringify({ m: reglages.minutesJour, s: reglages.semaine || null, e: reglages.exceptions || {}, n: reglages.notesVisees || {}, r: reglages.renforts || {} }); if (JSON.stringify({ m: d.minutesJour, s: d.semaine || null, e: d.exceptions || {}, n: d.notesVisees || {}, r: d.renforts || {} }) !== cur) { reglages = Object.assign({ minutesJour: 90 }, d); renderAll(); } } }, () => {});
   db.collection("plan").onSnapshot(s => { planHist = {}; for (const d of s.docs) if (/^\d{4}-\d{2}-\d{2}$/.test(d.id)) planHist[d.id] = (d.data() || {}).done || []; renderPlan(); snapshotPlan(); }, () => {});
 }
 
@@ -2867,7 +2879,7 @@ function renderAtelier() {
   if (!atelierState.chapId && chapSel.value) atelierState.chapId = chapSel.value;
   const chap = chapById(chapSel.value);
   const kinds = el("div", { class: "subtabs" }, Object.entries(ATELIERS).map(([k, v]) => el("button", { type: "button", "aria-pressed": k === kind ? "true" : "false", onclick: () => { atelierState = { kind: k, chapId: chapSel.value, questions: null, photos: [] }; renderAtelier(); } }, v.titre)));
-  const panel = el("div", { class: "panel" }, el("label", {}, "Chapitre", chapSel), el("div", { class: "info" }, A.consigne));
+  const panel = el("div", { class: "panel" }, el("label", {}, "Chapitre", chapSel), atelierState.focus && kind === "pourquoi" ? el("div", { class: "notice", style: "display:grid;gap:4px" }, el("b", {}, "Atelier ciblé : « " + atelierState.focus.theme.replace(/^Carte ratée : /, "") + " »"), el("span", {}, "Cette erreur revient dans : " + atelierState.focus.chapIds.map(id => (chapById(id) || {}).titre).filter(Boolean).join(" · ") + ". Les questions relient ces chapitres."), el("button", { class: "link", type: "button", onclick: () => { atelierState.focus = null; atelierState.questions = null; renderAtelier(); } }, "Revenir à un atelier normal")) : null, el("div", { class: "info" }, A.consigne));
   let champ = null;
   if (A.champ) {
     const dl = el("datalist", { id: "atNotions" }, String((chap && chap.notions) || "").split(",").map(n => n.trim()).filter(Boolean).map(n => el("option", { value: n })));
@@ -2909,6 +2921,7 @@ async function askWhy(chap) {
       "Tu fais travailler " + etu() + " par interrogation élaborative.",
       "Chapitre : " + chap.matiere + " · " + chap.titre + (chap.notions ? "\nNotions : " + chap.notions : "") + ((chap.pointsFaibles || []).length ? "\nPoints faibles : " + chap.pointsFaibles.join(" ; ") : ""),
       texte ? "Extrait du cours :\n\"\"\"\n" + texte.slice(0, 20000) + "\n\"\"\"" : "",
+      atelierState.focus ? "IMPORTANT : atelier ciblé sur une erreur qui revient dans plusieurs chapitres : « " + atelierState.focus.theme + " ». Signes repérés :\n- " + atelierState.focus.details.join("\n- ") + "\nLes 3 questions doivent attaquer précisément cette confusion, en reliant ces chapitres (au moins une question qui oblige à distinguer les cas où elle se produit)." : "",
       "Pose exactement 3 questions d'approfondissement qui obligent à comprendre et pas seulement à réciter : une « pourquoi est-ce vrai / d'où ça vient ? », une « que se passe-t-il si… ? » (changer une hypothèse ou une donnée), une « quel lien avec… ? » (autre notion du cours ou situation réelle). Cible si possible un point faible. Formules en texte Unicode.",
       "Réponds uniquement avec un objet JSON : {\"questions\": [string, string, string]}"
     ].filter(Boolean).join("\n\n"), { cache: false });
@@ -4066,7 +4079,7 @@ async function edtAutoAdd(manualFrom) {
   const t = today(), now = new Date(), hm = hmOf(now), from = manualFrom || edt.depuis || t;
   const done = new Set(edt.ajoutes || []), todo = new Map();
   for (const e of edt.events || []) {
-    const m = edt.map && edt.map[e.k]; if (!m || m === "_ignore") continue;
+    const m = edt.map && edt.map[e.k]; if (!m || m === "_ignore" || isExamEvent(e)) continue;
     if (e.d < from || e.d > t || (e.d === t && e.h2 > hm)) continue;
     const key = e.d + "|" + slug(m); if (done.has(key)) continue;
     if (!todo.has(key)) todo.set(key, { d: e.d, m, s: [] }); todo.get(key).s.push(e.s);
@@ -4157,6 +4170,204 @@ function subscribeNouv4() {
   setInterval(() => edtAutoAdd(), 10 * 60000);
 }
 
+/* =====================================================================
+   NOUVEAUTÉS 5 : temps de révision fiable (renforts au lieu de jours figés),
+   examens depuis l'emploi du temps, courbe de note, erreurs qui reviennent,
+   mode veille d'examen.
+   ===================================================================== */
+
+/* ---------- Temps de révision : source du temps du jour + renforts avant examen ----------
+   Avant, « Ajouter X min par jour » écrivait un temps fixe pour chaque jour jusqu'à l'examen :
+   ces jours ne suivaient plus le temps général. Désormais c'est un renfort (+X min) qui s'ajoute
+   au temps du jour, quel qu'il soit, et qu'on peut retirer. */
+let reglagesLocalT = 0;
+function budgetBase(d) {
+  const r = reglages || {}, ex = r.exceptions || {}, sem = Array.isArray(r.semaine) ? r.semaine : [];
+  const wd = parse(d).getDay();
+  if (ex[d] !== undefined && ex[d] !== null) return { v: Number(ex[d]), src: "exception" };
+  if (sem[wd] !== undefined && sem[wd] !== null && sem[wd] !== "") return { v: Number(sem[wd]), src: "semaine" };
+  const m = Number(r.minutesJour);
+  return { v: isFinite(m) ? m : 90, src: "general" };
+}
+function renfortFor(d) {
+  let x = 0;
+  for (const r of Object.values((reglages && reglages.renforts) || {})) if (r && d >= (r.depuis || "") && d <= r.jusqu) x += Number(r.extra) || 0;
+  return x;
+}
+function budgetBrut(d) {
+  const b = budgetBase(d);
+  let m = isFinite(b.v) ? b.v : 90;
+  if (m > 0) { const x = renfortFor(d); if (x) m = Math.min(m + x, Math.max(m, 240)); }
+  return m;
+}
+function applyExamBoost(a) {
+  const ren = Object.assign({}, (reglages && reglages.renforts) || {}), cur = ren[a.e.id];
+  ren[a.e.id] = { extra: Math.min(240, ((cur && cur.extra) || 0) + a.extra), depuis: today(), jusqu: addDays(a.e.date, -1), intitule: a.e.intitule };
+  saveReglages({ renforts: ren }, "+" + ren[a.e.id].extra + " min par jour jusqu'à « " + a.e.intitule + " »");
+}
+function setBudget(m) {
+  const foc = document.activeElement && document.activeElement.id === "budgetIn";
+  m = Math.max(15, Math.min(600, Math.round((Number(m) || 90) / 5) * 5));
+  saveReglages({ minutesJour: m }, "Temps de révision : " + fmtMin(m) + " par jour");
+  if (foc) { const i = $("budgetIn"); if (i) i.focus(); }
+}
+function budgetSourceNote() {
+  const t = today(), b = budgetBase(t), wd = parse(t).getDay(), out = [];
+  const ex = Object.entries((reglages && reglages.exceptions) || {}).filter(([d]) => d >= t);
+  const ren = Object.entries((reglages && reglages.renforts) || {}).filter(([, r]) => r && r.jusqu >= t);
+  if (b.src !== "general") out.push(el("div", { class: "row" },
+    el("span", { class: "m", style: "flex:1;min-width:200px" }, "Aujourd'hui, le temps général ne s'applique pas : " + (b.v <= 0 ? "jour off" : fmtMin(b.v)) + (b.src === "exception" ? " réglé pour ce jour précis." : " réglé pour tous les " + JOURS_LONG[wd].toLowerCase() + "s.")),
+    el("button", { type: "button", onclick: () => b.src === "exception" ? setException(t, null) : setJourSemaine(wd, null) }, b.src === "exception" ? "Suivre le temps général aujourd'hui" : "Les " + JOURS_LONG[wd].toLowerCase() + "s : temps général")));
+  if (ex.length >= 2) out.push(el("div", { class: "row" },
+    el("span", { class: "m", style: "flex:1;min-width:200px" }, ex.length + " jours ont un temps particulier (" + ex.slice(0, 4).map(([d, v]) => pretty(d) + " " + (Number(v) ? fmtMin(v) : "off")).join(", ") + (ex.length > 4 ? "…" : "") + ") : ils ne suivent pas le temps général."),
+    el("button", { type: "button", onclick: () => saveReglages({ exceptions: {} }, "Jours particuliers retirés : tous les jours suivent le temps général") }, "Tout remettre au temps général")));
+  for (const [id, r] of ren) out.push(el("div", { class: "row" },
+    el("span", { class: "m", style: "flex:1;min-width:200px" }, "Renfort avant « " + (r.intitule || "examen") + " » : +" + r.extra + " min par jour jusqu'au " + pretty(r.jusqu) + "."),
+    el("button", { class: "link", type: "button", onclick: () => { const x = Object.assign({}, reglages.renforts); delete x[id]; saveReglages({ renforts: x }, "Renfort retiré"); } }, "Retirer")));
+  return out.length ? el("div", { class: "info", style: "display:grid;gap:8px" }, out) : null;
+}
+
+/* ---------- Examens détectés dans l'emploi du temps ---------- */
+const EXAM_RE = /\b(partiel|partiels|examen|exam|ds|devoir surveill|controle|cc ?\d?|epreuve|rattrapage|qcm note)\b/;
+const isExamEvent = e => EXAM_RE.test(normTxt(e.s).replace(/[^a-z0-9 ]+/g, " "));
+async function edtAddExams() {
+  if (!edt || !db || !loaded.e) return 0;
+  const t = today(), done = new Set(edt.examsAjoutes || []), map = edt.map || {};
+  let n = 0;
+  for (const e of edt.events || []) {
+    if (e.d < t || !isExamEvent(e)) continue;
+    const m = map[e.k] && map[e.k] !== "_ignore" ? map[e.k] : guessMatiere(e.s);
+    if (!m) continue;
+    const key = e.d + "|" + slug(m); if (done.has(key)) continue;
+    done.add(key);
+    if (examens.some(x => x.date === e.d && normTxt(x.matiere) === normTxt(m))) continue;
+    const intitule = e.s.slice(0, 80);
+    const id = e.d + "-" + slug(m + " " + intitule);
+    if (await write(() => db.doc("examens/" + id).set({ matiere: m, intitule, date: e.d, heure: e.h1, etapes: [{ code: "Veille", due: addDays(e.d, -1), fait: null }, { code: "Jour J", due: e.d, fait: null }], chapIds: [], creeLe: t, source: "edt" }))) n++;
+  }
+  if (done.size !== (edt.examsAjoutes || []).length) { edt.examsAjoutes = [...done].slice(-200); await write(() => db.doc("plan/edt").update({ examsAjoutes: edt.examsAjoutes })); }
+  if (n) toast(n + " examen" + (n > 1 ? "s" : "") + " ajouté" + (n > 1 ? "s" : "") + " depuis ton emploi du temps (onglet Examens : vérifie le programme)");
+  return n;
+}
+
+/* ---------- Courbe de note estimée par matière, semaine après semaine ---------- */
+function matEstimateAt(m, until) {
+  const ids = new Set(chapitres.filter(c => c.matiere === m).map(c => c.id));
+  const byDate = (a, b) => String(b.corrigeLe || "").localeCompare(String(a.corrigeLe || ""));
+  const bl = blancs.filter(b => b.statut === "corrige" && b.matiere === m && typeof b.note === "number" && b.corrigeLe && b.corrigeLe <= until).sort(byDate).slice(0, 3);
+  const ex = exercices.filter(x => x.statut === "corrige" && typeof x.note === "number" && !x.mixte && ids.has(x.chapId) && x.corrigeLe && x.corrigeLe <= until).sort(byDate).slice(0, 8);
+  const mini = exercices.filter(x => x.mixte && x.statut === "corrige" && x.corrigeLe && x.corrigeLe <= until).flatMap(x => (x.parChapitre || []).filter(p => { const c = chapitres.find(c => ids.has(c.id) && normTxt(c.titre) === normTxt(p.chapitre)); return c && typeof p.note === "number"; }).map(p => ({ v: Math.min(20, p.note * 2) * 0.95, w: 1 })));
+  const vals = bl.map(b => ({ v: b.note, w: 2 })).concat(ex.map(x => ({ v: Math.min(20, x.note * 2) * (0.75 + 0.05 * (x.niveau || 1)), w: 1 })), mini);
+  return vals.length ? Math.round(10 * vals.reduce((a, x) => a + x.v * x.w, 0) / vals.reduce((a, x) => a + x.w, 0)) / 10 : null;
+}
+function courbeSvg(m, pts, target, proj) {
+  const W = 320, H = 120, L = 26, B = H - 18, T = 8, n = pts.length, X = i => L + i * (W - L - 8) / Math.max(1, n - 1 + (proj ? 1 : 0)), Y = v => B - (v / 20) * (B - T);
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("class", "forecast"); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", m + " : " + pts.map(p => p.label + " " + (p.v === null ? "pas de note" : p.v + "/20")).join(", ") + (target ? " ; objectif " + target + "/20" : ""));
+  const mk = (tag, a, txt) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); if (txt !== undefined) e.textContent = txt; svg.append(e); return e; };
+  for (const g of [0, 10, 20]) { mk("line", { x1: L, x2: W - 4, y1: Y(g), y2: Y(g), class: "axis", "stroke-dasharray": g === 10 ? "2 3" : "" }); mk("text", { x: L - 4, y: Y(g) + 4, class: "lbl", "text-anchor": "end" }, String(g)); }
+  if (target) { mk("line", { x1: L, x2: W - 4, y1: Y(target), y2: Y(target), stroke: "var(--ok)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }); mk("text", { x: W - 6, y: Y(target) - 4, class: "lbl", "text-anchor": "end", fill: "var(--ok)" }, "objectif " + String(target).replace(".", ",")); }
+  const col = matColor(m), seg = [];
+  pts.forEach((p, i) => { if (p.v !== null) seg.push([X(i), Y(p.v)]); });
+  if (seg.length > 1) mk("polyline", { points: seg.map(s => s.join(",")).join(" "), fill: "none", stroke: col, "stroke-width": 2.5, "stroke-linejoin": "round" });
+  pts.forEach((p, i) => { if (p.v !== null) { const c = mk("circle", { cx: X(i), cy: Y(p.v), r: 3.5, fill: col }); const tt = document.createElementNS(ns, "title"); tt.textContent = p.label + " : " + String(p.v).replace(".", ",") + "/20"; c.append(tt); } });
+  if (proj && seg.length) { const [lx, ly] = seg[seg.length - 1]; mk("line", { x1: lx, y1: ly, x2: X(n), y2: Y(proj.v), stroke: col, "stroke-width": 2, "stroke-dasharray": "4 4", opacity: 0.8 }); mk("circle", { cx: X(n), cy: Y(proj.v), r: 4, fill: "none", stroke: col, "stroke-width": 2 }); mk("text", { x: X(n), y: H - 4, class: "lbl", "text-anchor": "middle" }, proj.label); }
+  [0, n - 1].forEach(i => { if (n) mk("text", { x: X(i), y: H - 4, class: "lbl", "text-anchor": i ? "middle" : "start" }, pts[i].label); });
+  return svg;
+}
+function renderCourbes() {
+  const box = $("courbeBox"); if (!box || !(loaded.c && loaded.x && loaded.e)) return;
+  const t = today(), mats = [...new Set(chapitres.map(c => c.matiere))].sort(), nv = notesVisees();
+  const weeks = [...Array(8)].map((_, i) => addDays(t, -7 * (7 - i)));
+  const panels = mats.map(m => {
+    const pts = weeks.map((d, i) => ({ v: matEstimateAt(m, d), label: i === 7 ? "auj." : pretty(d).replace(/^\S+ /, "") }));
+    const known = pts.map((p, i) => [i, p.v]).filter(x => x[1] !== null);
+    if (!known.length) return null;
+    const ex = upcomingExams().find(e => normTxt(e.matiere) === normTxt(m));
+    let proj = null;
+    if (ex && known.length >= 2) {
+      const xs = known.map(k => k[0]), ys = known.map(k => k[1]), mx = xs.reduce((a, b) => a + b, 0) / xs.length, my = ys.reduce((a, b) => a + b, 0) / ys.length;
+      const den = xs.reduce((a, x) => a + (x - mx) ** 2, 0), slope = den ? xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / den : 0;
+      const wk = Math.max(0, diff(ex.date, t) / 7), s = Math.max(-1.5, Math.min(1.5, slope));
+      proj = { v: Math.round(10 * Math.max(0, Math.min(20, ys[ys.length - 1] + s * Math.min(wk, 6) * 0.7))) / 10, label: "examen" };
+    }
+    const last = known[known.length - 1][1], target = Number(nv[m]) || null;
+    return el("div", { class: "panel", style: "gap:6px" },
+      el("div", { class: "row" }, el("span", { class: "chip mat", style: mcStyle(m) }, m), el("span", { class: "mono", style: "color:var(--muted);font-size:12.5px" }, "estimé " + String(last).replace(".", ",") + "/20" + (target ? " · objectif " + String(target).replace(".", ",") : "") + (proj ? " · tendance le jour J ≈ " + String(proj.v).replace(".", ",") : ""))),
+      courbeSvg(m, pts, target, proj),
+      target && last < target - 0.5 ? el("div", { class: "m" }, "Écart de " + String(Math.round(10 * (target - last)) / 10).replace(".", ",") + " point" + (target - last >= 2 ? "s" : "") + " : la matière reçoit plus de temps de révision.") : null);
+  }).filter(Boolean);
+  box.replaceChildren(...(panels.length ? [el("h3", {}, "Évolution de ta note estimée"), el("div", { class: "hint" }, "Chaque point = ta note estimée en fin de semaine, d'après tes examens blancs, exercices et mini-partiels (un exercice facile compte moins). Pointillés : tendance jusqu'à l'examen si elle continue."), el("div", { class: "insights" }, panels)] : [el("div", { class: "hint" }, "La courbe de ta note estimée apparaîtra dès tes premiers exercices corrigés ou examens blancs.")]));
+}
+
+/* ---------- Erreurs qui reviennent dans plusieurs chapitres ---------- */
+const ERR_STOP = new Set("les des une pour avec dans sur par pas que qui est sont son ses aux mal bien entre plus moins tres fait faire erreur erreurs confusion oubli oublie calcul chapitre notion".split(" "));
+const errToks = s => [...new Set(normTxt(s).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 4 && !ERR_STOP.has(w)).map(w => w.slice(0, 7)))];
+function erreursRecurrentes() {
+  const items = [];
+  for (const c of chapitres) for (const p of c.pointsFaibles || []) { const tk = errToks(p); if (tk.length) items.push({ c, p, tk }); }
+  for (const c of chapitres) for (const k of cartes.filter(k => k.chapId === c.id && (k.lapses || 0) >= 3 && !k.suspendue).slice(0, 5)) { const tk = errToks(k.recto); if (tk.length) items.push({ c, p: "Carte ratée : " + k.recto, tk }); }
+  const sim = (a, b) => { const A = new Set(a.tk); const inter = b.tk.filter(x => A.has(x)).length; return inter >= 2 ? inter / Math.min(a.tk.length, b.tk.length) : 0; };
+  const used = new Set(), clusters = [];
+  for (let i = 0; i < items.length; i++) {
+    if (used.has(i)) continue;
+    const grp = [items[i]];
+    for (let j = i + 1; j < items.length; j++) if (!used.has(j) && grp.some(g => sim(g, items[j]) >= 0.5)) { grp.push(items[j]); used.add(j); }
+    const chs = [...new Set(grp.map(g => g.c.id))];
+    if (chs.length >= 2) { used.add(i); clusters.push({ items: grp, chapIds: chs, theme: grp.slice().sort((a, b) => a.p.length - b.p.length)[0].p }); }
+  }
+  return clusters.sort((a, b) => b.chapIds.length - a.chapIds.length || b.items.length - a.items.length).slice(0, 6);
+}
+function startErreurAtelier(cl) {
+  atelierState = { kind: "pourquoi", chapId: cl.chapIds[0], questions: null, photos: [], focus: { theme: cl.theme, details: cl.items.map(g => g.c.matiere + " · " + g.c.titre + " : " + g.p).slice(0, 8), chapIds: cl.chapIds } };
+  showTab("atelier"); renderAtelier();
+  const chap = chapById(cl.chapIds[0]);
+  if (chap) askWhy(chap);
+  const b = $("atelierBox"); if (b) b.scrollIntoView({ block: "start" });
+}
+function renderErreurs() {
+  const box = $("errBox"); if (!box || !(loaded.c && loaded.k)) return;
+  const cl = erreursRecurrentes();
+  $("errCount").textContent = cl.length ? String(cl.length) : "";
+  box.replaceChildren(...(cl.length ? cl.map(x => el("div", { class: "item", style: "grid-template-columns:1fr auto" },
+    el("div", { class: "what" }, el("div", { class: "t" }, x.theme.replace(/^Carte ratée : /, "")), el("div", { class: "m" }, "Revient dans " + x.chapIds.length + " chapitres : " + x.chapIds.map(id => (chapById(id) || {}).titre).filter(Boolean).join(" · ")),
+      el("details", {}, el("summary", {}, "Les " + x.items.length + " signes repérés"), el("ul", { style: "margin:6px 0 0;padding-left:18px" }, x.items.map(g => el("li", { class: "m" }, g.c.titre + " : " + g.p))))),
+    el("div", { class: "actions" }, el("button", { class: "primary", type: "button", onclick: () => startErreurAtelier(x) }, "Atelier ciblé")))) : [el("div", { class: "empty" }, "Aucune erreur ne revient pour l'instant dans plusieurs chapitres. Les points faibles de tes exercices, examens blancs et ateliers, et tes cartes très ratées, sont comparés entre chapitres ; une même confusion qui revient apparaîtra ici.")]));
+}
+
+/* ---------- Mode veille d'examen ---------- */
+function veilleExam() {
+  const t = today();
+  return upcomingExams().find(e => diff(e.date, t) === 1 && !((e.etapes || []).find(x => x.code === "Veille") || {}).fait) || null;
+}
+let veilleShowAll = false;
+try { veilleShowAll = localStorage.getItem("rev-veille-tout") === today(); } catch (e) {}
+function renderVeille() {
+  const sec = $("veilleSec"), box = $("veilleBox"), view = $("v-jour"); if (!sec || !box || !(loaded.c && loaded.e && loaded.k)) return;
+  const e = veilleExam();
+  sec.hidden = !e;
+  view.classList.toggle("veille-only", !!e && !veilleShowAll);
+  if (!e) { box.replaceChildren(); return; }
+  const chs = examChapters(e), withR = chs.map(c => ({ c, r: chapRecall(c, e.date) })).sort((a, b) => (a.r.p ?? 2) - (b.r.p ?? 2));
+  const weak = withR[0] ? withR[0].c : null;
+  const it = dueItems().find(x => x.kind === "exam" && x.doc.id === e.id && x.s.code === "Veille");
+  const step = (n, title, txt, btn) => el("li", {}, el("span", { class: "chip exam" }, String(n)), el("div", { class: "c" }, el("b", {}, title), " ", txt, btn ? el("div", { class: "actions", style: "justify-content:flex-start;margin-top:6px" }, btn) : null));
+  box.replaceChildren(el("div", { class: "panel pomo-on", style: "gap:14px" },
+    el("div", { class: "row" }, el("div", {}, el("div", { class: "date" }, "Veille d'examen"), el("h2", { style: "margin-top:2px" }, e.matiere + " · " + e.intitule)), el("span", { class: "chip exam" }, "demain" + (e.heure ? " à " + e.heure : ""))),
+    el("div", { class: "m" }, "Ce soir, seulement l'essentiel : pas de nouvelle notion. " + (withR.length ? "Chapitre le plus fragile : " + withR[0].c.titre + " (" + pctTxt(withR[0].r.p) + " de chances de t'en souvenir)." : "")),
+    el("ol", { class: "steps" },
+      step(1, "Fiches de la veille", "une page par chapitre : lis-les, cache-les, récite les points clés de mémoire.", ficheBtn(e, "Télécharger les fiches (PDF)")),
+      step(2, "Flashcards du programme", "les cartes des " + chs.length + " chapitre" + (chs.length > 1 ? "s" : "") + ", les plus fragiles d'abord.", el("button", { class: "primary", type: "button", disabled: !chs.length || null, onclick: () => { showTab("cartes"); startSession({ chapIds: chs.map(c => c.id), label: "Veille · " + e.intitule }); } }, "Lancer les cartes")),
+      step(3, "Un exercice type examen", weak ? "sur « " + weak.titre + " », en conditions réelles." : "", weak ? el("button", { type: "button", onclick: () => { showTab("exos"); $("exChap").value = weak.id; $("exLvl").value = "4"; curExo = null; generateExercise(); } }, "Lancer l'exercice") : null),
+      step(4, "Dors", "le sommeil consolide ce que tu viens de revoir : arrête les écrans tôt.", it ? el("button", { class: "done", type: "button", onclick: () => markExamDone(it.doc, it.i) }, "Veille faite") : null)),
+    el("div", { class: "row" }, el("span", { class: "hint" }, veilleShowAll ? "Toute la page est affichée." : "Le reste de la page est masqué ce soir pour rester concentré."),
+      el("button", { class: "link", type: "button", onclick: () => { veilleShowAll = !veilleShowAll; try { localStorage.setItem("rev-veille-tout", veilleShowAll ? today() : ""); } catch (er) {} renderVeille(); } }, veilleShowAll ? "Mode veille : n'afficher que l'essentiel" : "Afficher toute la page"))));
+}
+
+function renderNouv5() { renderCourbes(); renderErreurs(); renderVeille(); if (edt && loaded.e) { clearTimeout(renderNouv5._t); renderNouv5._t = setTimeout(() => edtAddExams(), 3500); } }
+function matEstimate(m) { matCacheCheck(); if (matCache.est.has(m)) return matCache.est.get(m); const v = matEstimateAt(m, today()); matCache.est.set(m, v); return v; }
+
 /* ================= Rendu global & navigation ================= */
 function renderMatieres() {
   const set = new Set(DEFAULT_MATIERES);
@@ -4176,7 +4387,7 @@ function renderSelects() {
 function renderAll() {
   renderBudget(); renderGreeting(); renderToday(); renderStats(); renderSuggest(); renderBrief(); renderStreak(); renderProgress(); renderUpcoming();
   if (!session) renderSession();
-  renderCardList(); renderLevels(); renderExHist(); renderChapters(); renderExams(); renderMatieres(); renderSelects(); renderExtras(); if (!$("atelierBox").contains(document.activeElement)) renderAtelier(); renderAtelierHist(); renderPomo(); snapshotPlan(); renderBilan(); renderNouv4();
+  renderCardList(); renderLevels(); renderExHist(); renderChapters(); renderExams(); renderMatieres(); renderSelects(); renderExtras(); if (!$("atelierBox").contains(document.activeElement)) renderAtelier(); renderAtelierHist(); renderPomo(); snapshotPlan(); renderBilan(); renderNouv4(); renderNouv5();
 }
 function showTab(name) {
   currentTab = name;
