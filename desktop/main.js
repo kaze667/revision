@@ -129,7 +129,7 @@ function checkReminders() {
     const rows = store.all();
     for (const m of moments) {
       const msg = buildMessage(rows, date, m, s.prenom, dimanche);
-      notify(msg.title, msg.body, "jour");
+      if (!msg.skip) notify(msg.title, msg.body, "jour");
       writeSettings(m === "matin" ? { last_matin: date } : { last_soir: date });
     }
   } catch (e) { console.error("rappels", e); }
@@ -212,7 +212,7 @@ function registerIpc() {
   ipcMain.handle("notif:test", guard(() => {
     const s = readSettings(), { date, dimanche } = localNow();
     const msg = buildMessage(store.all(), date, new Date().getHours() < 14 ? "matin" : "soir", s.prenom, dimanche);
-    return notify("Test réussi : " + msg.title, msg.body, "jour");
+    return notify("Test réussi" + (msg.title ? " : " + msg.title : ""), msg.skip ? "Jour off ce soir : pas de rappel prévu." : msg.body, "jour");
   }));
   ipcMain.handle("file:saveAs", guard(async (name, text) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath("documents"), safeName(name)) });
