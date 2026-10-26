@@ -315,6 +315,12 @@ details.more > summary { padding: 4px 2px; }
 #memoBar[hidden] { display: none; }
 #v-jour.veille-only > :not(#veilleSec) { display: none; }
 #veilleSec[hidden] { display: none; }
+.dropzone { display: grid; gap: 10px; padding: 16px; border: 2px dashed var(--line); border-radius: 14px; background: var(--night-2); transition: border-color .15s ease, background .15s ease; }
+.dropzone.over { border-color: var(--amber); background: var(--amber-soft); }
+.dropzone label.btn { cursor: pointer; font-size: 14px; color: var(--ink); }
+.imp-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; max-height: 200px; overflow: auto; font-size: 13px; color: var(--muted); }
+.imp-list li { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.imp-list li span { overflow-wrap: anywhere; }
 .memo-mat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .memo-mat button { margin-left: auto; padding: 5px 12px; font-size: 13px; }
 .rate button.sugg { outline: 2px solid var(--amber); outline-offset: 2px; }
@@ -549,7 +555,11 @@ details.more > summary { padding: 4px 2px; }
       </div>
       <form class="panel" id="fImp" autocomplete="off">
         <div class="fields">
-          <label class="full">Fichier(s) : PDF ou photos du cours<input id="iFiles" type="file" accept="application/pdf,image/*" multiple required></label>
+          <div class="full dropzone" id="iDrop">
+            <div><b>Dépose ici tes fichiers ou un dossier entier</b><div class="m">PDF, photos du cours, notes .txt ou .md : tous les fichiers du dossier (et de ses sous-dossiers) sont lus ensemble, dans l'ordre de leurs noms.</div></div>
+            <div class="actions" style="justify-content:flex-start"><label class="btn">Choisir des fichiers<input id="iFiles" type="file" accept="application/pdf,image/*,.txt,.md,text/plain,text/markdown" multiple hidden></label><label class="btn">Choisir un dossier<input id="iFolder" type="file" webkitdirectory directory multiple hidden></label></div>
+            <div id="iList"></div>
+          </div>
           <label>Ajouter à<select id="iTarget"></select></label>
           <label>Type de document<select id="iKind"><option value="cours">Cours</option><option value="fiche">Fiche de révision</option><option value="td">TD / exercices</option></select></label>
           <label>Matière (nouveau chapitre)<input id="iMat" list="matieres" placeholder="Microéconomie"></label>
@@ -2162,8 +2172,8 @@ async function readPdf(file, maxImages) {
 
 async function importFiles(ev) {
   ev.preventDefault();
-  const out = $("impOut"), files = [...$("iFiles").files];
-  if (!files.length) return;
+  const out = $("impOut"), files = impFiles.slice();
+  if (!files.length) return toast("Choisis des fichiers ou un dossier à importer.");
   if (!db) return toast("Le suivi n'est pas disponible ici.");
   const target = $("iTarget").value, kind = $("iKind").value;
   let chap = target === "new" ? null : chapById(target);
@@ -2181,7 +2191,8 @@ async function importFiles(ev) {
         const r = await readPdf(f, native ? 0 : Math.max(0, maxImg - images.length));
         text += "\n\n=== " + f.name + " ===\n" + r.text; images = images.concat(r.images);
         if (native) { pdfs.push(f); pdfBytes += f.size; }
-      } else if (f.type.startsWith("image/")) { if (images.length < maxImg) images.push(f); }
+      } else if (f.type.startsWith("image/") || /\.(jpe?g|png|webp|heic|gif)$/i.test(f.name)) { if (images.length < maxImg) images.push(f); }
+      else if (/^text\//.test(f.type) || /\.(txt|md)$/i.test(f.name)) { text += "\n\n=== " + impPath(f) + " ===\n" + (await fileText(f)).slice(0, 60000); }
       step("Enregistrement de « " + f.name + " »…");
       try { const path = await uploadFile(f); stored.push({ path, nom: f.name, kind, ajouteLe: today() }); }
       catch (e) { toast("« " + f.name + " » n'a pas pu être stocké (" + (e && e.message ? e.message : "erreur") + "), mais il est analysé."); }
@@ -2196,7 +2207,7 @@ async function importFiles(ev) {
       "Type de document : " + (kind === "fiche" ? "fiche de révision" : kind === "td" ? "feuille de TD / exercices" : "cours") + ". Chapitre : " + ctx + ".",
       pdfs.length ? "Le ou les PDF joints sont le document complet : lis-les en entier (y compris schémas, tableaux et pages scannées)." : "",
       images.length ? "Les images jointes sont des pages du document (scan ou photos) : lis-les." : "",
-      !pdfs.length && hasText ? "Texte extrait :\n\"\"\"\n" + text.slice(0, 90000) + "\n\"\"\"" : "",
+      (!pdfs.length && hasText) || /=== [^=]*\.(txt|md) ===/i.test(text) ? "Texte extrait :\n\"\"\"\n" + text.slice(0, 90000) + "\n\"\"\"" : "",
       existing.length ? "Cartes déjà existantes pour ce chapitre (pas de doublon) :\n- " + existing.join("\n- ") : "",
       "Fais : (1) un titre de chapitre court si on ne t'en a pas donné ; (2) la liste des notions clés (10 à 20, séparées par des virgules) ; (3) " + (kind === "td" ? "10 à 15 flashcards sur les MÉTHODES de résolution et les pièges de ces exercices" : "15 à 25 flashcards") + " : une idée par carte, question précise qui force le rappel, réponse courte et exacte reformulée, mélange définitions / formules avec conditions / intuition économique / méthode / petite application ; (4) " + (hasText ? "laisse la transcription vide" : "une transcription fidèle et structurée du contenu, car le document est scanné ou en photos") + ".",
       "Formules en texte Unicode, pas de LaTeX.",
@@ -2226,7 +2237,7 @@ async function importFiles(ev) {
       if (await write(() => db.doc("cartes/" + chap.id + "-" + rid()).set(Object.assign(newCardBase(chap.id), Object.assign({ matiere: chap.matiere, chapitre: chap.titre }, aiCardData(x), { source: "import" }))))) n++;
     }
     out.replaceChildren(el("div", { class: "info" }, "« " + chap.titre + " » : document enregistré, notions extraites, " + n + " flashcards créées." + (target === "new" ? " Les 5 révisions sont programmées." : "")));
-    $("iFiles").value = ""; $("iTitre").value = ""; if (resetIDebut) resetIDebut();
+    impFiles = []; renderImpList(); $("iTitre").value = ""; if (resetIDebut) resetIDebut();
   } catch (e) {
     out.replaceChildren(el("div", { class: "notice" }, e && e.code === "write" ? "Le chapitre n'a pas pu être créé." : e instanceof Error && !e.code ? "Impossible de lire ce fichier. Essaie un autre PDF ou des photos." : sampleMsg(e)));
   } finally { $("iBtn").disabled = false; }
@@ -4368,6 +4379,66 @@ function renderVeille() {
 function renderNouv5() { renderCourbes(); renderErreurs(); renderVeille(); if (edt && loaded.e) { clearTimeout(renderNouv5._t); renderNouv5._t = setTimeout(() => edtAddExams(), 3500); } }
 function matEstimate(m) { matCacheCheck(); if (matCache.est.has(m)) return matCache.est.get(m); const v = matEstimateAt(m, today()); matCache.est.set(m, v); return v; }
 
+/* ---------- Import : fichiers, dossiers entiers (bouton ou glisser-déposer) ---------- */
+let impFiles = [];
+const IMP_OK = f => /^application\/pdf$/.test(f.type) || /\.pdf$/i.test(f.name) || /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|gif)$/i.test(f.name) || /^text\/(plain|markdown)$/.test(f.type) || /\.(txt|md)$/i.test(f.name);
+const impPath = f => f._rel || f.webkitRelativePath || f.name;
+function addImpFiles(list) {
+  const all = [...list], ok = all.filter(f => IMP_OK(f) && !/^\./.test(f.name));
+  const seen = new Set(impFiles.map(f => impPath(f) + "|" + f.size));
+  for (const f of ok) { const k = impPath(f) + "|" + f.size; if (!seen.has(k)) { seen.add(k); impFiles.push(f); } }
+  impFiles.sort((a, b) => impPath(a).localeCompare(impPath(b), "fr", { numeric: true, sensitivity: "base" }));
+  const skipped = all.length - ok.length;
+  if (skipped) toast(skipped + " fichier" + (skipped > 1 ? "s ignorés" : " ignoré") + " (seuls les PDF, photos et notes .txt/.md sont lus)");
+  renderImpList();
+}
+function renderImpList() {
+  const box = $("iList"); if (!box) return;
+  if (!impFiles.length) { box.replaceChildren(el("span", { class: "m" }, "Aucun fichier choisi.")); return; }
+  const mb = impFiles.reduce((a, f) => a + f.size, 0) / 1048576;
+  const dirs = [...new Set(impFiles.map(f => impPath(f).includes("/") ? impPath(f).split("/")[0] : null).filter(Boolean))];
+  box.replaceChildren(...[
+    el("div", { class: "row" }, el("span", { class: "t" }, impFiles.length + " fichier" + (impFiles.length > 1 ? "s" : "") + (dirs.length ? " (dossier" + (dirs.length > 1 ? "s" : "") + " " + dirs.join(", ") + ")" : "") + " · " + (mb < 1 ? Math.max(1, Math.round(mb * 1024)) + " Ko" : mb.toFixed(1).replace(".", ",") + " Mo")),
+      el("button", { class: "link", type: "button", onclick: () => { impFiles = []; renderImpList(); } }, "Tout retirer")),
+    el("ul", { class: "imp-list" }, impFiles.slice(0, 60).map((f, i) => el("li", {}, el("span", {}, impPath(f)), el("button", { class: "link", type: "button", "aria-label": "Retirer " + f.name, onclick: () => { impFiles.splice(i, 1); renderImpList(); } }, "×")))),
+    impFiles.length > 60 ? el("div", { class: "m" }, "… et " + (impFiles.length - 60) + " autres.") : null,
+    impFiles.length > 20 || mb > 40 ? el("div", { class: "notice" }, "Beaucoup de contenu pour un seul chapitre : l'IA ne pourra en lire qu'une partie (environ 90 000 caractères de texte et quelques pages en image). Pour un semestre entier, importe plutôt chapitre par chapitre (un sous-dossier à la fois).") : null].filter(Boolean));
+}
+// Lecture récursive d'un dossier déposé (API des entrées de fichiers du navigateur).
+function readEntry(entry, prefix) {
+  return new Promise(res => {
+    if (entry.isFile) entry.file(f => { try { f._rel = prefix + f.name; } catch (e) {} res([f]); }, () => res([]));
+    else if (entry.isDirectory) {
+      const rd = entry.createReader(), all = [];
+      const next = () => rd.readEntries(async ents => {
+        if (!ents.length) { const parts = await Promise.all(all.map(e => readEntry(e, prefix + entry.name + "/"))); res(parts.flat()); return; }
+        all.push(...ents); next();
+      }, () => res([]));
+      next();
+    } else res([]);
+  });
+}
+function setupImpDrop() {
+  const zone = $("iDrop"); if (!zone || zone.dataset.bound) return;
+  zone.dataset.bound = "1";
+  $("iFiles").addEventListener("change", ev => { addImpFiles(ev.target.files); ev.target.value = ""; });
+  $("iFolder").addEventListener("change", ev => { addImpFiles(ev.target.files); ev.target.value = ""; });
+  const on = v => zone.classList.toggle("over", v);
+  zone.addEventListener("dragover", ev => { ev.preventDefault(); on(true); });
+  zone.addEventListener("dragleave", ev => { if (!zone.contains(ev.relatedTarget)) on(false); });
+  zone.addEventListener("drop", async ev => {
+    ev.preventDefault(); on(false);
+    const items = [...(ev.dataTransfer.items || [])].map(it => it.webkitGetAsEntry ? it.webkitGetAsEntry() : null);
+    if (items.length && items.every(Boolean)) {
+      $("iList").replaceChildren(busy("Lecture du dossier…"));
+      const files = (await Promise.all(items.map(e => readEntry(e, "")))).flat();
+      addImpFiles(files);
+    } else addImpFiles(ev.dataTransfer.files || []);
+  });
+  renderImpList();
+}
+const fileText = f => typeof f.text === "function" ? f.text() : new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result || "")); r.onerror = () => rej(r.error); r.readAsText(f); });
+
 /* ================= Rendu global & navigation ================= */
 function renderMatieres() {
   const set = new Set(DEFAULT_MATIERES);
@@ -4921,7 +4992,7 @@ async function enterAppInner(u) {
 }
 function startApp() {
   sample = AI; imgLimits = AI.limits();
-  setupUI(); setupSettings(); setupExtras(); setupExtras2(); setupExtras3(); setupNouv4(); renderMatieres(); renderGreeting();
+  setupUI(); setupSettings(); setupExtras(); setupExtras2(); setupExtras3(); setupNouv4(); setupImpDrop(); renderMatieres(); renderGreeting();
   $("pomoPill").addEventListener("click", () => showTab("jour"));
   if (!profile.prenom || !AI.ready()) showTab("reglages");
   const onErr = e => { $("dbNotice").hidden = false; $("dbNotice").textContent = "Problème de connexion à la base" + (e && e.message ? " : " + e.message : "") + "."; };
