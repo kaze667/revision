@@ -1423,6 +1423,7 @@ function calItemLine(it, p, reprog) {
       el("div", { class: "t" }, c.titre, tour ? [" ", el("span", { class: "chip exam", title: "Tour de préparation de l'examen, réuni avec la révision du calendrier" }, "+ tour " + tour.tour + "/" + tour.tours)] : null),
       el("div", { class: "m" }, c.matiere + (it.late ? " · prévu " + pretty(it.s.due) : "") + (it.s.ratees ? " · pas su " + it.s.ratees + "×" : "") + " · ≈ " + fmtMin(mins) + (reprog ? " · replanifiée au " + pretty(reprog) : reprog === null ? " · à replanifier" : ""))),
     el("div", { class: "actions" },
+      reprog !== undefined ? el("button", { class: "primary", type: "button", title: "Flashcards du chapitre (créées par l'IA s'il en a peu), puis un exercice, puis la révision est cochée", onclick: () => startMemoRunItems([it], "supplémentaire") }, "Réviser maintenant") : null,
       tour ? el("button", { type: "button", onclick: () => { showTab("cartes"); startSession({ chapIds: [c.id], label: c.titre }); } }, "Cartes") : null,
       tour && !court ? el("button", { type: "button", onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = String(tourLevel(tour)); curExo = null; generateExercise(); } }, "Exercice") : null,
       el("button", { class: "done", type: "button", onclick: async () => { markDone(c, it.i); if (tour && !((planJour && planJour.done) || []).includes(tour.key)) await togglePlanDone(tour.key); } }, "Fait"),
@@ -3490,6 +3491,7 @@ function memoRunGo() {
   if (!memoRun) return;
   const m = memoRun.mats[memoRun.i];
   if (!m) return memoRunEnd();
+  if (memoRun.phase === "cartes" && !m.genFait && aiOk() && m.chapIds.some(id => cartes.filter(k => k.chapId === id && !k.suspendue).length < MEMO_MIN_CARTES)) { memoGenThenGo(m); return; }
   if (memoRun.phase === "cartes") {
     const ok = m.nCards && cartes.some(k => m.chapIds.includes(k.chapId) && !k.suspendue);
     if (ok) {
@@ -3553,9 +3555,9 @@ function memoRunEnd() {
 function memoPanelNodes() {
   const m = memoRun && memoRun.mats[memoRun.i]; if (!m) return [];
   const steps = memoRun.mats.map((x, i) => el("span", { class: "chip " + (i < memoRun.i ? "ok" : i === memoRun.i ? "exam" : "muted") }, x.matiere));
-  const phase = memoRun.phase === "cartes" ? "flashcards" : memoRun.phase === "exo" ? "exercice" : "bilan";
+  const phase = memoRun.phase === "cartes" ? (m.genFait || m.nCards >= MEMO_MIN_CARTES ? "flashcards" : "flashcards (création)") : memoRun.phase === "exo" ? "exercice" : "bilan";
   return [
-    el("div", { class: "row" }, el("div", { class: "t" }, "Mémorisation · " + m.matiere + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ") · étape : " + phase), el("span", { class: "actions" }, steps)),
+    el("div", { class: "row" }, el("div", { class: "t" }, (memoRun.extra ? "Révision supplémentaire · " : "Mémorisation · ") + m.matiere + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ") · étape : " + phase), el("span", { class: "actions" }, steps)),
     memoRun.phase === "fin"
       ? el("div", { class: "actions", style: "justify-content:flex-start" },
           el("button", { class: "primary", type: "button", onclick: () => memoMarkAndNext(true) }, "Cocher " + (m.keys.length > 1 ? "les " + m.keys.length + " révisions" : "la révision") + " de " + m.matiere + " et " + (memoRun.i + 1 < memoRun.mats.length ? "passer à " + memoRun.mats[memoRun.i + 1].matiere : "terminer")),
@@ -3601,7 +3603,7 @@ function renderToday() {
       g ? el("button", { type: "button", onclick: () => startMemoRun(m) }, "Lancer " + m) : null));
     list.forEach(it => box.append(calItemLine(it, p)));
   }
-  if (extra.length) { const sch = loaded.k ? calSchedule(p) : new Map(); box.append(el("details", { class: "more" }, el("summary", {}, (jourOff() ? "Jour off : " : "Si tu as encore du temps ") + "(" + extra.length + ") — sinon, réparties automatiquement sur les jours suivants"), el("div", { class: "list", style: "margin-top:8px" }, extra.map(it => calItemLine(it, p, it.kind === "chap" ? (sch.get(it.doc.id + "|" + it.i) || null) : undefined))))); }
+  if (extra.length) { const sch = loaded.k ? calSchedule(p) : new Map(); box.append(el("details", { class: "more" }, el("summary", {}, (jourOff() ? "Jour off : " : "Si tu as encore du temps ") + "(" + extra.length + ") — sinon, réparties automatiquement sur les jours suivants"), el("div", { class: "list", style: "margin-top:8px" }, extra.filter(x => x.kind === "chap").length > 1 ? el("div", { class: "row" }, el("span", { class: "hint", style: "flex:1;min-width:200px" }, "Tu as du temps en plus ? Enchaîne-les comme le parcours du jour, matière par matière (tu peux arrêter quand tu veux)."), el("button", { type: "button", onclick: () => startMemoRunItems(extra, "supplémentaire") }, "Tout enchaîner (" + extra.filter(x => x.kind === "chap").length + ")")) : null, extra.map(it => calItemLine(it, p, it.kind === "chap" ? (sch.get(it.doc.id + "|" + it.i) || null) : undefined))))); }
 }
 
 /* ---------- Fiches de la veille (PDF, une page par chapitre) ---------- */
@@ -4438,6 +4440,57 @@ function setupImpDrop() {
   renderImpList();
 }
 const fileText = f => typeof f.text === "function" ? f.text() : new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result || "")); r.onerror = () => rej(r.error); r.readAsText(f); });
+
+/* ---------- Révisions supplémentaires : « Réviser maintenant » ----------
+   Une révision « si tu as encore du temps » se lance comme le parcours du jour : flashcards du chapitre
+   (générées automatiquement par l'IA s'il en a peu), puis un exercice, puis la révision est cochée. */
+const MEMO_MIN_CARTES = 6;
+function memoGroupsFrom(items, p) {
+  const g = new Map();
+  for (const it of items) { const m = it.doc.matiere; if (!g.has(m)) g.set(m, []); g.get(m).push(it); }
+  return [...g.entries()].map(([matiere, list]) => {
+    const chapIds = [...new Set(list.map(it => it.doc.id))];
+    const withTour = chapIds.find(id => p.prep.merged.has(id) && !p.prep.court.has(p.prep.merged.get(id).key));
+    const sorted = list.slice().sort((a, b) => (b.late - a.late) || ((a.doc.niveau || 1) - (b.doc.niveau || 1)));
+    return { matiere, chapIds, keys: list.map(it => it.doc.id + "|" + it.i), exoChap: withTour || sorted[0].doc.id, lvl: withTour ? tourLevel(p.prep.merged.get(withTour)) : null, nCards: cartes.filter(k => chapIds.includes(k.chapId) && !k.suspendue).length };
+  });
+}
+function memoGroups(p) { return memoGroupsFrom(dueItems().filter(it => it.kind === "chap" && p.cal.fit.has(it.doc.id + "|" + it.i)), p); }
+function startMemoRunItems(items, label) {
+  const mats = memoGroupsFrom(items.filter(it => it.kind === "chap"), dayProgram());
+  if (!mats.length) return;
+  if (memoRun && !confirmReplaceMemo()) return;
+  memoRun = { date: today(), mats, i: 0, phase: "cartes", extra: true, label: label || "" }; saveMemo();
+  memoRunGo();
+}
+function confirmReplaceMemo() { toast("Parcours précédent remplacé"); return true; }
+const aiOk = () => !!sample && !(typeof AI !== "undefined" && AI && AI.ready && !AI.ready());
+// Crée des flashcards pour les chapitres qui en ont trop peu (même méthode que « Générer des cartes »).
+async function ensureCards(chapIds) {
+  let n = 0;
+  for (const id of chapIds) {
+    const chap = chapById(id); if (!chap) continue;
+    const have = cartes.filter(k => k.chapId === id && !k.suspendue).length;
+    if (have >= MEMO_MIN_CARTES) continue;
+    const texte = await getTexte(id);
+    const existing = cartes.filter(c => c.chapId === id).map(c => c.recto).slice(0, 80);
+    const res = await sample.json(cardsPrompt(chap, texte, "base", existing, weakPointsOf(chap)), { cache: false });
+    const arr = (Array.isArray(res) ? res : Array.isArray(res && res.cartes) ? res.cartes : []).filter(x => x && x.recto && (x.verso || x.type === "trous" || /\{\{/.test(String(x.recto))));
+    for (const x of arr.slice(0, 25)) { const doc = Object.assign(newCardBase(id), aiCardData(x), { source: "ia" }); const cid = id + "-" + rid(); if (await write(() => db.doc("cartes/" + cid).set(doc))) { n++; if (!cartes.some(k => k.id === cid)) cartes.push(Object.assign({ id: cid }, doc)); } }
+  }
+  return n;
+}
+let memoGenBusy = false;
+async function memoGenThenGo(m) {
+  if (memoGenBusy) return;
+  memoGenBusy = true; m.genFait = true; saveMemo();
+  const bar = $("memoBar"); if (bar) { bar.hidden = false; bar.replaceChildren(busy("Génération des flashcards de " + m.matiere + " (le chapitre en a peu)…")); }
+  try { const n = await ensureCards(m.chapIds); if (n) toast(n + " flashcards créées pour " + m.matiere); }
+  catch (e) { toast(sampleMsg(e) + " On continue avec les cartes existantes."); }
+  finally { memoGenBusy = false; }
+  m.nCards = cartes.filter(k => m.chapIds.includes(k.chapId) && !k.suspendue).length; saveMemo();
+  memoRunGo();
+}
 
 /* ================= Rendu global & navigation ================= */
 function renderMatieres() {
