@@ -2516,7 +2516,7 @@ function computePlan() {
   }
   return days;
 }
-function planTaskLine(task, withActions, court) {
+function planTaskLine(task, withActions, court, enPlus) {
   const done = planJour && Array.isArray(planJour.done) && planJour.done.includes(task.key);
   const ex = task.exam, dte = diff(ex.date, today());
   if (task.kind === "blanc") {
@@ -2532,6 +2532,7 @@ function planTaskLine(task, withActions, court) {
     el("span", { class: "chip" }, "Tour " + task.tour + "/" + task.tours),
     el("div", { class: "what" }, el("div", { class: "t" }, c.titre), el("div", { class: "m" }, c.matiere + " · pour " + ex.intitule + " (J-" + dte + ") · " + (court ? "flashcards du chapitre (version courte : pas le temps pour l'exercice aujourd'hui) · ≈ " + fmtMin(TOUR_CARTES) : "flashcards du chapitre + exercice niveau " + Math.min(5, lvl) + " · ≈ " + fmtMin(TOUR_CARTES + exoMin())))),
     withActions ? el("div", { class: "actions" },
+      enPlus && !done ? el("button", { class: "primary", type: "button", title: "Flashcards du chapitre (créées par l'IA s'il en a peu), puis l'exercice du tour, puis le tour est coché", onclick: () => startTourRun([task]) }, "Réviser maintenant") : null,
       el("button", { type: "button", onclick: () => { showTab("cartes"); startSession({ chapIds: [c.id], label: c.titre }); } }, "Cartes"),
       el("button", { type: "button", onclick: () => { showTab("exos"); $("exChap").value = c.id; $("exLvl").value = String(Math.min(5, lvl)); curExo = null; generateExercise(); } }, "Exercice"),
       el("button", { class: done ? "done" : "", type: "button", onclick: () => togglePlanDone(task.key) }, done ? "Fait ✓" : "Fait")) : null);
@@ -2558,7 +2559,7 @@ function renderPlan() {
     const extra = shown.filter(x => prog.prep.extra.has(x.key));
     shown.filter(x => !extra.includes(x)).forEach(task => box.append(planTaskLine(task, true, prog.prep.court.has(task.key))));
     if (mergedTasks.length) box.append(el("div", { class: "hint" }, mergedTasks.length + " tour" + (mergedTasks.length > 1 ? "s" : "") + " réuni" + (mergedTasks.length > 1 ? "s" : "") + " avec la révision du calendrier du même chapitre, dans « Mémorisation des cours » : " + mergedTasks.map(x => x.chap.titre).join(", ") + "."));
-    if (extra.length) box.append(el("details", { class: "more" }, el("summary", {}, "Si tu as encore du temps (" + extra.length + ")"), el("div", { class: "list", style: "margin-top:8px" }, extra.map(task => planTaskLine(task, true, false)))));
+    if (extra.length) box.append(el("details", { class: "more" }, el("summary", {}, "Si tu as encore du temps (" + extra.length + ")"), el("div", { class: "list", style: "margin-top:8px" }, (() => { const tours = extra.filter(x => x.kind === "chap" && !(planJour && (planJour.done || []).includes(x.key))); return tours.length > 1 ? el("div", { class: "row" }, el("span", { class: "hint", style: "flex:1;min-width:200px" }, "Tu as du temps en plus ? Enchaîne ces tours l'un après l'autre : flashcards, exercice, tour coché (tu peux arrêter quand tu veux)."), el("button", { type: "button", onclick: () => startTourRun(tours) }, "Tout enchaîner (" + tours.length + ")")) : null; })(), extra.map(task => planTaskLine(task, true, false, true)))));
   }
   const n = todayTasks.length, d = todayTasks.filter(x => planJour && (planJour.done || []).includes(x.key)).length;
   $("planCount").textContent = n ? d + " / " + n : "";
@@ -3496,7 +3497,7 @@ function memoRunGo() {
     const ok = m.nCards && cartes.some(k => m.chapIds.includes(k.chapId) && !k.suspendue);
     if (ok) {
       showTab("cartes");
-      startSession({ chapIds: m.chapIds, label: m.matiere + " · mémorisation (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ")" });
+      startSession({ chapIds: m.chapIds, label: (m.tourLabel ? "Préparation · " + m.tourLabel : m.matiere + " · " + (memoRun.extra ? "révision en plus" : "mémorisation")) + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ")" });
       if (session && session.queue.length) { session.memo = true; renderMemoBar(); return; }
       session = null; renderSession();
     }
@@ -3534,7 +3535,8 @@ async function memoMarkAndNext(mark) {
       const tour = dayProgram().prep.merged.get(cid);
       if (tour && !((planJour && planJour.done) || []).includes(tour.key)) await togglePlanDone(tour.key);
     }
-    toast(m.matiere + " : révisions cochées");
+    for (const k of m.planKeys || []) if (!((planJour && planJour.done) || []).includes(k)) await togglePlanDone(k);
+    toast(m.matiere + (m.planKeys ? " : tour coché" : " : révisions cochées"));
   }
   memoRun.i++; memoRun.phase = "cartes"; saveMemo();
   if (memoRun.i >= memoRun.mats.length) return memoRunEnd();
@@ -3557,12 +3559,12 @@ function memoPanelNodes() {
   const steps = memoRun.mats.map((x, i) => el("span", { class: "chip " + (i < memoRun.i ? "ok" : i === memoRun.i ? "exam" : "muted") }, x.matiere));
   const phase = memoRun.phase === "cartes" ? (m.genFait || m.nCards >= MEMO_MIN_CARTES ? "flashcards" : "flashcards (création)") : memoRun.phase === "exo" ? "exercice" : "bilan";
   return [
-    el("div", { class: "row" }, el("div", { class: "t" }, (memoRun.extra ? "Révision supplémentaire · " : "Mémorisation · ") + m.matiere + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ") · étape : " + phase), el("span", { class: "actions" }, steps)),
+    el("div", { class: "row" }, el("div", { class: "t" }, (memoRun.prep ? "Préparation d'examen · " : memoRun.extra ? "Révision supplémentaire · " : "Mémorisation · ") + m.matiere + " (" + (memoRun.i + 1) + "/" + memoRun.mats.length + ") · étape : " + phase), el("span", { class: "actions" }, steps)),
     memoRun.phase === "fin"
       ? el("div", { class: "actions", style: "justify-content:flex-start" },
-          el("button", { class: "primary", type: "button", onclick: () => memoMarkAndNext(true) }, "Cocher " + (m.keys.length > 1 ? "les " + m.keys.length + " révisions" : "la révision") + " de " + m.matiere + " et " + (memoRun.i + 1 < memoRun.mats.length ? "passer à " + memoRun.mats[memoRun.i + 1].matiere : "terminer")),
+          el("button", { class: "primary", type: "button", onclick: () => memoMarkAndNext(true) }, "Cocher " + (m.planKeys ? "le " + m.tourLabel : (m.keys.length > 1 ? "les " + m.keys.length + " révisions" : "la révision") + " de " + m.matiere) + " et " + (memoRun.i + 1 < memoRun.mats.length ? "passer à " + memoRun.mats[memoRun.i + 1].matiere : "terminer")),
           el("button", { type: "button", onclick: () => memoMarkAndNext(false) }, "Continuer sans cocher"))
-      : el("div", { class: "m" }, memoRun.phase === "cartes" ? "Les flashcards des chapitres du jour de " + m.matiere + ", puis un exercice démarre tout seul." : "Fais l'exercice sur papier puis fais-le corriger : la suite s'affiche ensuite."),
+      : el("div", { class: "m" }, memoRun.phase === "cartes" ? (m.tourLabel ? "Les flashcards de « " + chapById(m.exoChap).titre + " »" : "Les flashcards des chapitres du jour de " + m.matiere) + ", puis un exercice démarre tout seul." : "Fais l'exercice sur papier puis fais-le corriger : la suite s'affiche ensuite."),
     el("div", { class: "actions", style: "justify-content:flex-start" },
       memoRun.phase !== "fin" ? el("button", { type: "button", onclick: memoSkip }, memoRun.phase === "cartes" ? "Passer à l'exercice" : "Passer l'exercice") : null,
       el("button", { class: "link", type: "button", onclick: () => { memoRun = null; saveMemo(); renderMemoBar(); toast("Parcours arrêté"); } }, "Arrêter le parcours"))];
@@ -4489,6 +4491,20 @@ async function memoGenThenGo(m) {
   catch (e) { toast(sampleMsg(e) + " On continue avec les cartes existantes."); }
   finally { memoGenBusy = false; }
   m.nCards = cartes.filter(k => m.chapIds.includes(k.chapId) && !k.suspendue).length; saveMemo();
+  memoRunGo();
+}
+
+/* ---------- Préparation des examens : « Réviser maintenant » sur les tours en plus ----------
+   Même enchaînement que la mémorisation : flashcards du chapitre (créées par l'IA s'il en a peu),
+   exercice au niveau du tour, puis le tour est coché. */
+function tourRunEntry(task) {
+  return { matiere: task.chap.matiere, chapIds: [task.chapId], keys: [], planKeys: [task.key], exoChap: task.chapId, lvl: tourLevel(task), nCards: cartes.filter(k => k.chapId === task.chapId && !k.suspendue).length, tourLabel: "tour " + task.tour + "/" + task.tours + " · " + task.chap.titre };
+}
+function startTourRun(tasks) {
+  const mats = tasks.filter(x => x.kind === "chap" && x.chap).map(tourRunEntry);
+  if (!mats.length) return;
+  if (memoRun) toast("Parcours précédent remplacé");
+  memoRun = { date: today(), mats, i: 0, phase: "cartes", extra: true, prep: true }; saveMemo();
   memoRunGo();
 }
 
