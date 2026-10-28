@@ -1,4 +1,4 @@
-<!doctype html>
+<!<!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
@@ -871,7 +871,11 @@ function sampleMsg(e) {
   if (c === "prompt_too_large") return "Cours trop long pour une seule demande. Importe-le en plusieurs parties.";
   if (c === "image_rejected") return "Photo refusée : essaie une autre image (JPEG ou PNG).";
   if (c === "cancelled") return "Annulé.";
-  return "L'IA n'a pas pu répondre" + (e && e.message ? " (" + String(e.message).slice(0, 140) + ")" : "") + ". Réessaie.";
+  if (c === "network") return "Impossible de joindre Google (" + (e.message || "réseau") + "). Vérifie ta connexion, désactive un bloqueur de publicité ou une extension qui bloque « generativelanguage.googleapis.com », ou essaie un autre navigateur.";
+  if (c === "region") return "Google refuse l'IA Gemini depuis ta région (message : " + String(e.message || "").slice(0, 120) + ").";
+  if (c === "api_disabled") return "L'API Gemini n'est pas activée pour le projet de cette clé. Crée plutôt la clé directement sur aistudio.google.com/apikey (« Create API key »), elle sera prête à l'emploi.";
+  if (c === "all_failed") return "Aucun modèle Gemini n'a répondu. Détail : " + String(e.message || "").slice(0, 400);
+  return "L'IA n'a pas pu répondre" + (e && e.message ? " (" + String(e.message).slice(0, 200) + ")" : e && e.code ? " (" + e.code + ")" : "") + ". Réessaie.";
 }
 
 /* ================= Examens / priorités ================= */
@@ -4749,30 +4753,37 @@ function parseJsonLoose(text) {
   throw { code: "invalid_json", text: t };
 }
 const GEM_BASE = "https://generativelanguage.googleapis.com/v1beta";
+// Appel réseau vers Google : une coupure (réseau, bloqueur de publicité, pare-feu, extension) devient une erreur lisible.
+async function gemFetch(url, opts) {
+  try { return await fetch(url, opts); }
+  catch (e) { if (e && e.name === "AbortError") throw { code: "cancelled" }; throw { code: "network", message: (e && e.message) || "réseau" }; }
+}
 async function geminiModels(key) {
-  const res = await fetch(GEM_BASE + "/models?pageSize=200", { headers: { "x-goog-api-key": key } });
+  const res = await gemFetch(GEM_BASE + "/models?pageSize=200", { headers: { "x-goog-api-key": key } });
   if (!res.ok) throw await geminiErr(res);
   const j = await res.json();
   const names = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent")).map(m => String(m.name).replace(/^models\//, ""));
   const ver = n => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
   const bad = /lite|image|tts|audio|live|embed|thinking|exp|robotics|computer|native/i;
-  let c = names.filter(n => /^gemini-\d+(\.\d+)?-flash(-\d+)?$/.test(n));
-  if (!c.length) c = names.filter(n => /flash/i.test(n) && !bad.test(n));
-  c.sort((a, b) => ver(b) - ver(a) || a.length - b.length);
+  // Modèles Flash stables d'abord (le plus récent en tête), puis les versions « preview » en secours.
+  const c = names.filter(n => /^gemini-\d+(\.\d+)?-flash(-\d+)?$/.test(n)).sort((a, b) => ver(b) - ver(a) || a.length - b.length);
+  c.push(...names.filter(n => /flash/i.test(n) && !bad.test(n) && !c.includes(n)).sort((a, b) => ver(b) - ver(a) || a.length - b.length));
   const lite = names.filter(n => /^gemini-\d+(\.\d+)?-flash-lite$/.test(n)).sort((a, b) => ver(b) - ver(a));
   return c.concat(lite);
 }
 async function geminiErr(res) {
   let msg = ""; try { const j = await res.json(); msg = (j.error && j.error.message) || ""; } catch (e) {}
   if (res.status === 429) return { code: "rate_limited", message: msg, status: 429 };
+  if (/location is not supported|not available in your country|region/i.test(msg)) return { code: "region", message: msg, status: res.status };
+  if (/SERVICE_DISABLED|has not been used in project|is disabled/i.test(msg)) return { code: "api_disabled", message: msg, status: res.status };
   if (res.status === 400 && /api key|API_KEY/i.test(msg)) return { code: "bad_key", message: msg };
   if (res.status === 401 || res.status === 403) return { code: "bad_key", message: msg };
   if (res.status === 413) return { code: "too_big", message: msg };
   if (res.status === 404) return { code: "model_missing", message: msg };
-  return { code: "upstream_error", message: msg || ("HTTP " + res.status) };
+  return { code: "upstream_error", message: msg || ("HTTP " + res.status), status: res.status };
 }
 async function geminiCall(key, model, parts, signal) {
-  const res = await fetch(GEM_BASE + "/models/" + encodeURIComponent(model) + ":generateContent", {
+  const res = await gemFetch(GEM_BASE + "/models/" + encodeURIComponent(model) + ":generateContent", {
     method: "POST", signal,
     headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } })
@@ -4781,7 +4792,7 @@ async function geminiCall(key, model, parts, signal) {
   const j = await res.json();
   const cand = (j.candidates || [])[0];
   const text = cand && cand.content ? (cand.content.parts || []).map(p => p.text || "").join("") : "";
-  if (!text) throw (j.promptFeedback && j.promptFeedback.blockReason) || (cand && cand.finishReason === "SAFETY") ? { code: "refused" } : { code: "empty_completion", message: cand && cand.finishReason };
+  if (!text) throw (j.promptFeedback && j.promptFeedback.blockReason) || (cand && cand.finishReason === "SAFETY") ? { code: "refused" } : { code: "empty_completion", message: "réponse vide" + (cand && cand.finishReason ? " (" + cand.finishReason + ")" : "") };
   return parseJsonLoose(text);
 }
 const AI = {
@@ -4804,23 +4815,27 @@ const AI = {
     if (profile.gemini_model) models = [profile.gemini_model];
     else {
       let saved = null; try { saved = localStorage.getItem("revi-gm"); } catch (e) {}
-      try { models = await geminiModels(key); } catch (e) { if (e.code === "bad_key") throw e; }
+      try { models = await geminiModels(key); } catch (e) { if (["bad_key", "network", "region", "api_disabled"].includes(e.code)) throw e; }
       if (saved && models.includes(saved)) models = [saved].concat(models.filter(m => m !== saved));
-      if (!models.length) models = ["gemini-2.5-flash"];
+      // Noms génériques en dernier recours (les anciens modèles sont retirés au fil du temps).
+      for (const f of ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"]) if (!models.includes(f)) models.push(f);
     }
-    let lastErr = null;
-    for (const m of models.slice(0, 4)) {
+    let lastErr = null; const tried = [];
+    for (const m of models.slice(0, 6)) {
       try {
         const r = await geminiCall(key, m, parts, signal);
         try { localStorage.setItem("revi-gm", m); } catch (e) {}
         return r;
       } catch (e) {
-        lastErr = e;
-        // Modèle absent ou sans quota gratuit : on essaie le suivant.
-        if (!(e.code === "model_missing" || (e.code === "rate_limited" && /limit: ?0|free_tier/i.test(e.message || "")))) throw e;
+        lastErr = e; tried.push(m + " : " + (e.status ? "HTTP " + e.status + " " : "") + String(e.message || e.code || "erreur").slice(0, 90));
+        // Erreurs qui ne dépendent pas du modèle : inutile d'en essayer un autre.
+        if (["bad_key", "network", "region", "api_disabled", "cancelled", "too_big", "refused"].includes(e.code)) throw e;
+        if (e.code === "rate_limited" && !/limit: ?0|free_tier/i.test(e.message || "")) throw e;
+        if (e.code === "invalid_json" && tried.length >= 2) throw e;
+        try { if (localStorage.getItem("revi-gm") === m) localStorage.removeItem("revi-gm"); } catch (er) {}
       }
     }
-    throw lastErr || { code: "upstream_error" };
+    throw Object.assign({}, lastErr || { code: "upstream_error" }, { code: lastErr && lastErr.code === "rate_limited" ? "rate_limited" : "all_failed", message: "modèles essayés : " + tried.join(" ; ") });
   }
 };
 
